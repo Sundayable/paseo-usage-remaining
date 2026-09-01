@@ -51,6 +51,10 @@ paseo plugin update usage-remaining
 - Provider usage endpoints are unofficial and can change without notice.
 - Cursor team-billed seats return no plan usage from the endpoint this plugin uses.
 
+## Credits
+
+Provider endpoint and credential-file handling is based on Paseo's own open-source quota-fetcher ([getpaseo/paseo](https://github.com/getpaseo/paseo), Apache-2.0). Provider logos are the trademarks of their respective owners, used for identification only.
+
 ## License
 
 MIT
