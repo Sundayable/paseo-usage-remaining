@@ -35,10 +35,13 @@ function resetLabel(iso: string | null | undefined): string | null {
   if (Number.isNaN(date.getTime())) return iso;
   const delta = date.getTime() - Date.now();
   if (delta <= 0) return "now";
-  const totalMinutes = Math.max(1, Math.round(delta / 60_000));
+  const totalMinutes = Math.max(1, Math.floor(delta / 60_000));
   const totalHours = Math.floor(totalMinutes / 60);
   if (totalHours < 1) return `${totalMinutes}m`;
-  if (totalHours < 24) return `${totalHours}h`;
+  if (totalHours < 24) {
+    const remMinutes = totalMinutes % 60;
+    return remMinutes === 0 ? `${totalHours}h` : `${totalHours}h ${remMinutes}m`;
+  }
   const days = Math.floor(totalHours / 24);
   const remHours = totalHours % 24;
   if (days >= 3 || remHours === 0) return `${days}d`;

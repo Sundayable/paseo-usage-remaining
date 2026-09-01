@@ -7,7 +7,7 @@ Two lines, always visible while you work:
 - **5H** — 5-hour session limits (Claude, Codex when active)
 - **WK** — weekly limits (Claude, Fable, Codex, Grok) and Cursor's monthly plan
 
-Each entry shows the provider logo, remaining %, and time until reset (e.g. `1d 6h`). Click the pill for a full dashboard, or open it from the sidebar ("Remaining") and the Command Center.
+Each entry shows the provider logo, remaining %, and time until reset (e.g. `1h 23m` under 24 hours, or `1d 6h`). Click the pill for a full dashboard, or open it from the sidebar ("Remaining") and the Command Center.
 
 ## What it reads
 
