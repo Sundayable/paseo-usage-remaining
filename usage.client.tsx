@@ -1,5 +1,5 @@
 import { type PluginClientContext, type PluginComposerPillProps, type PluginSurfaceProps, useRpc } from "@getpaseo/plugin";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Image, Pressable, ScrollView, Text, View } from "react-native";
 import { providerLogos } from "./logos";
@@ -14,12 +14,21 @@ function toneColor(theme: PluginSurfaceProps["theme"], tone: RemainingRow["tone"
 
 function useUsage() {
   const list = useRpc(listUsage);
-  return useQuery({
+  const queryClient = useQueryClient();
+  const query = useQuery({
     queryKey: ["usage-remaining"],
     queryFn: () => list({}),
     refetchInterval: 60_000,
     staleTime: 30_000,
   });
+  return {
+    ...query,
+    manualRefresh: async () => {
+      const data = await list({ force: true });
+      queryClient.setQueryData(["usage-remaining"], data);
+      return data;
+    },
+  };
 }
 
 const MANUAL_REFRESH_COOLDOWN_MS = 120_000;
@@ -206,7 +215,7 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
           theme={theme}
           compact={false}
           isFetching={usage.isFetching}
-          onRefresh={() => { void usage.refetch(); }}
+          onRefresh={() => { void usage.manualRefresh(); }}
         />
       </View>
       {usage.isError ? <Text style={styles.error}>{String(usage.error)}</Text> : null}
@@ -260,7 +269,7 @@ export function UsagePill({ theme }: PluginComposerPillProps) {
         theme={theme}
         compact
         isFetching={usage.isFetching}
-        onRefresh={() => { void usage.refetch(); }}
+        onRefresh={() => { void usage.manualRefresh(); }}
       />
     </View>
   );

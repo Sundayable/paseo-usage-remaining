@@ -25,7 +25,7 @@ export const UsageSnapshotSchema = z.object({
 
 export const listUsage = defineRpc({
   name: "usage.list",
-  input: z.object({}),
+  input: z.object({ force: z.boolean().optional() }),
   output: UsageSnapshotSchema,
 });
 

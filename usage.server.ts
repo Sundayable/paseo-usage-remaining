@@ -122,9 +122,9 @@ async function readClaudeEnvToken(): Promise<string | undefined> {
   return undefined;
 }
 
-async function fetchClaude(): Promise<RemainingRow[]> {
+async function fetchClaude(force = false): Promise<RemainingRow[]> {
   const now = Date.now();
-  if (lastClaudeRows && now - lastClaudeAt < CLAUDE_MIN_INTERVAL_MS) {
+  if (!force && lastClaudeRows && now - lastClaudeAt < CLAUDE_MIN_INTERVAL_MS) {
     return lastClaudeRows;
   }
   const tokens: string[] = [];
@@ -466,10 +466,10 @@ function pillText(rows: RemainingRow[]): string {
   return rows.map((r) => `${r.label} ${r.remainingText}`).join(" · ");
 }
 
-export async function fetchUsage(): Promise<UsageSnapshot> {
+export async function fetchUsage(input: { force?: boolean } = {}): Promise<UsageSnapshot> {
   await loadCache();
   const [claude, codex, grok, cursor] = await Promise.allSettled([
-    fetchClaude(),
+    fetchClaude(input.force === true),
     fetchCodex(),
     fetchGrok(),
     fetchCursor(),
