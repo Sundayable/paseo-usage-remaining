@@ -1,7 +1,7 @@
 import { type PluginClientContext, type PluginComposerPillProps, type PluginSurfaceProps, useRpc } from "@getpaseo/plugin";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
-import { Image, ScrollView, Text, View } from "react-native";
+import { useEffect, useMemo, useState } from "react";
+import { Image, Pressable, ScrollView, Text, View } from "react-native";
 import { providerLogos } from "./logos";
 import { listUsage, type RemainingRow } from "./usage.shared";
 
@@ -20,6 +20,87 @@ function useUsage() {
     refetchInterval: 60_000,
     staleTime: 30_000,
   });
+}
+
+const MANUAL_REFRESH_COOLDOWN_MS = 120_000;
+let manualRefreshAvailableAt = 0;
+const manualRefreshListeners = new Set<() => void>();
+
+function beginManualRefreshCooldown(): void {
+  manualRefreshAvailableAt = Date.now() + MANUAL_REFRESH_COOLDOWN_MS;
+  for (const listener of manualRefreshListeners) listener();
+}
+
+function useManualRefreshCooldown(): number {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const update = () => setNow(Date.now());
+    manualRefreshListeners.add(update);
+    const timer = setInterval(update, 1_000);
+    return () => {
+      manualRefreshListeners.delete(update);
+      clearInterval(timer);
+    };
+  }, []);
+  return Math.max(0, Math.ceil((manualRefreshAvailableAt - now) / 1_000));
+}
+
+function formatCooldown(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function RefreshButton({
+  theme,
+  compact,
+  isFetching,
+  onRefresh,
+}: {
+  theme: PluginSurfaceProps["theme"];
+  compact: boolean;
+  isFetching: boolean;
+  onRefresh: () => void;
+}) {
+  const cooldownSeconds = useManualRefreshCooldown();
+  const disabled = isFetching || cooldownSeconds > 0;
+  const label = cooldownSeconds > 0
+    ? compact ? formatCooldown(cooldownSeconds) : `갱신 ${formatCooldown(cooldownSeconds)}`
+    : isFetching
+      ? compact ? "…" : "갱신 중…"
+      : compact ? "↻" : "↻ 갱신";
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={cooldownSeconds > 0 ? `${cooldownSeconds}초 후 다시 갱신 가능` : "사용량 갱신"}
+      disabled={disabled}
+      onPress={(event) => {
+        event.stopPropagation();
+        if (disabled) return;
+        beginManualRefreshCooldown();
+        onRefresh();
+      }}
+      style={{
+        minWidth: compact ? 32 : 76,
+        height: compact ? 24 : 34,
+        paddingHorizontal: compact ? 6 : 12,
+        borderRadius: compact ? 7 : 9,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.surface2,
+        alignItems: "center",
+        justifyContent: "center",
+        opacity: disabled ? 0.55 : 1,
+      }}
+    >
+      <Text
+        numberOfLines={1}
+        style={{ color: disabled ? theme.colors.foregroundMuted : theme.colors.foreground, fontSize: compact ? 10 : 13, fontWeight: "700" }}
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
 }
 
 function BrandMark({
@@ -119,7 +200,15 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: theme.colors.surface0 }} contentContainerStyle={styles.screen}>
-      <Text style={styles.title}>남은 사용량</Text>
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <Text style={styles.title}>남은 사용량</Text>
+        <RefreshButton
+          theme={theme}
+          compact={false}
+          isFetching={usage.isFetching}
+          onRefresh={() => { void usage.refetch(); }}
+        />
+      </View>
       {usage.isError ? <Text style={styles.error}>{String(usage.error)}</Text> : null}
       <Text style={styles.section}>5시간 세션</Text>
       {session.map((row) => (
@@ -152,19 +241,27 @@ export function UsagePill({ theme }: PluginComposerPillProps) {
   const session = rows.filter((r) => r.group === "session" && r.status === "available");
   const weekly = rows.filter((r) => r.group === "weekly" && r.status === "available");
   return (
-    <View style={{ flexDirection: "column", gap: 2, flexShrink: 1, paddingVertical: 1 }}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-        <GroupHeader theme={theme} text="5H" compact />
-        {session.map((row) => (
-          <UsageChip key={row.id} row={row} theme={theme} compact />
-        ))}
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexShrink: 1, paddingVertical: 1 }}>
+      <View style={{ flexDirection: "column", gap: 2, flexShrink: 1 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <GroupHeader theme={theme} text="5H" compact />
+          {session.map((row) => (
+            <UsageChip key={row.id} row={row} theme={theme} compact />
+          ))}
+        </View>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <GroupHeader theme={theme} text="WK" compact />
+          {weekly.map((row) => (
+            <UsageChip key={row.id} row={row} theme={theme} compact />
+          ))}
+        </View>
       </View>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-        <GroupHeader theme={theme} text="WK" compact />
-        {weekly.map((row) => (
-          <UsageChip key={row.id} row={row} theme={theme} compact />
-        ))}
-      </View>
+      <RefreshButton
+        theme={theme}
+        compact
+        isFetching={usage.isFetching}
+        onRefresh={() => { void usage.refetch(); }}
+      />
     </View>
   );
 }

@@ -42,6 +42,7 @@ paseo plugin update usage-remaining
 ## Behavior details
 
 - Refreshes every 60s (Claude throttled to 2 min to respect Anthropic's rate limits).
+- The pill and dashboard include a manual refresh button. After a manual refresh, the button shows a shared 2-minute countdown before it can be pressed again.
 - If a provider's token is mid-rotation (common while agents run), the plugin serves the **last good value** from a small local cache (`$PASEO_HOME/usage-remaining.cache.json`) instead of flickering to "—".
 - Rows with no data are hidden from the pill but shown in the dashboard.
 
