@@ -57,6 +57,7 @@ function baseRow(id: string, brand: Brand, group: Group, label: string): Remaini
     remainingText: "—",
     remainingPct: null,
     resetAt: null,
+    resetIso: null,
     detail: "unavailable",
     tone: "default",
     status: "unavailable",
@@ -80,6 +81,7 @@ function row(
     remainingText: pctText(remainingPct),
     remainingPct,
     resetAt: resetLabel(resetIso),
+    resetIso: resetIso ?? null,
     detail,
     tone: toneFromRemaining(remainingPct),
     status: remainingPct == null ? "unavailable" : "available",
@@ -485,7 +487,9 @@ export async function fetchUsage(): Promise<UsageSnapshot> {
   rows.push(grok.status === "fulfilled" ? grok.value : baseRow("grok_week", "grok", "weekly", "Grok"));
   rows.push(cursor.status === "fulfilled" ? cursor.value : baseRow("cursor_month", "cursor", "weekly", "Cursor"));
 
-  const merged = withLastGood(rows);
+  const merged = withLastGood(rows).map((r) =>
+    r.resetIso ? { ...r, resetAt: resetLabel(r.resetIso) } : r,
+  );
   const session = merged.filter((r) => r.group === "session");
   const weekly = merged.filter((r) => r.group === "weekly");
   return {

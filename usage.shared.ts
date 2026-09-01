@@ -11,6 +11,7 @@ export const RemainingRowSchema = z.object({
   remainingText: z.string(),
   remainingPct: z.number().nullable(),
   resetAt: z.string().nullable(),
+  resetIso: z.string().nullable().optional(),
   detail: z.string().nullable(),
   tone: RemainingToneSchema,
   status: z.enum(["available", "unavailable", "error"]),
