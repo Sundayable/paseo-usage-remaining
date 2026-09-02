@@ -296,10 +296,10 @@ async function fetchCodex(): Promise<RemainingRow[]> {
     rows.push(row(id, "codex", group, "Codex", remainingFromUsed(w.used_percent), iso));
   }
   if (rows.length === 0) return fallback;
-  // The endpoint omits the 5-hour window entirely while it is unused, so a
-  // weekly-only answer means the session window is full.
-  if (rows.some((r) => r.id === "codex_week") && !rows.some((r) => r.id === "codex_session")) {
-    rows.unshift(row("codex_session", "codex", "session", "Codex", 100, null, "unused"));
+  // Some plans (e.g. Pro as of 2026-09) have only a weekly window; do not invent
+  // a session row the endpoint did not report.
+  if (!rows.some((r) => r.id === "codex_session")) {
+    rows.unshift({ ...baseRow("codex_session", "codex", "session", "Codex"), detail: "no 5-hour window on this plan" });
   }
   return rows;
 }
