@@ -46,6 +46,8 @@ paseo plugin update usage-remaining
 - The pill and dashboard include a manual refresh button. A manual refresh re-queries Codex, Grok, and Cursor immediately; Claude still keeps its 5-minute minimum interval and any active cooldown. After a manual refresh, the button shows a shared 2-minute countdown before it can be pressed again.
 - If a provider's token is mid-rotation (common while agents run), the plugin serves the **last good value** from a small local cache (`$PASEO_HOME/usage-remaining.cache.json`) instead of flickering to "—". Absolute reset timestamps are cached, so countdown labels keep updating even while the provider API is rate-limited.
 - Rows with no data are hidden from the pill but shown in the dashboard.
+- On a narrow screen (the host's compact breakpoint, e.g. the phone app) the pill drops the reset labels and its refresh button so the chips are not clipped; tap the pill for the dashboard, which shows both.
+- Paseo caches plugin UI code in the app. After changing a client-side file, reopen the Paseo app; `paseo plugin reload` alone updates only the server side.
 - A cached row is dropped once its own reset time passes, so a stale pre-reset % is never shown next to `now`.
 
 ## Caveats
