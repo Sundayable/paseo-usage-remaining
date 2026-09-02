@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
@@ -97,15 +98,20 @@ async function readJson(path: string): Promise<unknown | null> {
   }
 }
 
-// Anthropic rate-limits the usage endpoint per account (a 429 carries a ~1 hour
-// retry-after and every token of the account gets it), so poll no faster than
-// Paseo's own quota fetcher, treat one 429 as an account-wide cooldown, and never
-// spend a call on a token that is already expired.
-let claudeCooldownUntil = 0;
+// Anthropic's usage endpoint answers 429 (retry-after ~1 h) for tokens it will not
+// serve: expired access tokens and long-lived setup tokens. A fresh keychain token
+// from an interactive Claude Code login answers 200. So: never call with an expired
+// token, prefer keychain/file tokens over the env setup token, and keep a per-token
+// cooldown (persisted across reloads) so a rejected token is not retried for an hour.
+const claudeTokenCooldownUntil = new Map<string, number>();
 let lastClaudeRows: RemainingRow[] | null = null;
 let lastClaudeAt = 0;
 const CLAUDE_MIN_INTERVAL_MS = 5 * 60_000;
 const CLAUDE_DEFAULT_COOLDOWN_MS = 60 * 60_000;
+
+function tokenKey(token: string): string {
+  return createHash("sha256").update(token).digest("hex").slice(0, 16);
+}
 
 type ClaudeCredential = { token: string; expiresAt: number | null };
 
@@ -174,12 +180,12 @@ async function fetchClaude(): Promise<RemainingRow[]> {
   // The minimum interval applies to manual refreshes too: the endpoint blocks the
   // whole account for an hour when it is polled too often.
   if (rowsStillValid && now - lastClaudeAt < CLAUDE_MIN_INTERVAL_MS) return lastClaudeRows!;
-  if (now < claudeCooldownUntil) return rowsStillValid ? lastClaudeRows! : fallback;
 
   const tokens = (await readClaudeCredentials())
     .filter((cred) => cred.expiresAt == null || cred.expiresAt > now + 30_000)
-    .map((cred) => cred.token);
-  if (tokens.length === 0) return fallback;
+    .map((cred) => cred.token)
+    .filter((token) => (claudeTokenCooldownUntil.get(tokenKey(token)) ?? 0) <= now);
+  if (tokens.length === 0) return rowsStillValid ? lastClaudeRows! : fallback;
 
   type ClaudeUsageBody = {
     five_hour?: { utilization?: number; resets_at?: string | null };
@@ -205,12 +211,9 @@ async function fetchClaude(): Promise<RemainingRow[]> {
     if (res.status === 429) {
       const retryAfter = Number(res.headers.get("retry-after"));
       const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : CLAUDE_DEFAULT_COOLDOWN_MS;
-      claudeCooldownUntil = now + waitMs;
-      // Persist it: a plugin reload must not spend another request while blocked,
-      // because each attempt during the block appears to extend it.
+      claudeTokenCooldownUntil.set(tokenKey(token), now + waitMs);
       saveCache();
-      // Account-wide limit: trying the next token only adds to the count.
-      break;
+      continue;
     }
     if (!res.ok) continue;
     body = (await res.json()) as ClaudeUsageBody;
@@ -464,8 +467,10 @@ async function loadCache(): Promise<void> {
   if (raw && typeof raw === "object") {
     for (const [id, entry] of Object.entries(raw as Record<string, unknown>)) {
       if (id === CLAUDE_META_KEY) {
-        const meta = entry as { cooldownUntil?: number; lastAt?: number } | null;
-        if (typeof meta?.cooldownUntil === "number") claudeCooldownUntil = Math.max(claudeCooldownUntil, meta.cooldownUntil);
+        const meta = entry as { tokenCooldowns?: Record<string, number>; lastAt?: number } | null;
+        for (const [key, until] of Object.entries(meta?.tokenCooldowns ?? {})) {
+          if (typeof until === "number" && until > Date.now()) claudeTokenCooldownUntil.set(key, until);
+        }
         if (typeof meta?.lastAt === "number") lastClaudeAt = Math.max(lastClaudeAt, meta.lastAt);
         continue;
       }
@@ -481,7 +486,7 @@ function saveCache(): void {
   setTimeout(() => {
     savePending = false;
     const obj: Record<string, unknown> = Object.fromEntries(lastGood.entries());
-    obj[CLAUDE_META_KEY] = { cooldownUntil: claudeCooldownUntil, lastAt: lastClaudeAt };
+    obj[CLAUDE_META_KEY] = { tokenCooldowns: Object.fromEntries(claudeTokenCooldownUntil.entries()), lastAt: lastClaudeAt };
     void writeFile(CACHE_PATH, JSON.stringify(obj)).catch(() => undefined);
   }, 500);
 }

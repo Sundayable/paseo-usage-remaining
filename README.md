@@ -41,7 +41,8 @@ paseo plugin update usage-remaining
 
 ## Behavior details
 
-- Refreshes every 60s. Claude is polled at most every 5 min: Anthropic's usage endpoint blocks the whole account for about an hour when it is polled too often, and one 429 puts the plugin into an account-wide cooldown for the `retry-after` the server sends. Expired Claude tokens are skipped without a request.
+- Refreshes every 60s. Claude is polled at most every 5 min. Anthropic's usage endpoint answers `429` (retry-after about an hour) for tokens it will not serve: expired access tokens and long-lived `claude setup-token` tokens. A fresh token from an interactive Claude Code login answers normally. The plugin skips expired tokens without a request, prefers keychain/file tokens over the env setup token, and remembers a per-token cooldown across reloads.
+- If the Claude rows stay hidden, the keychain token has expired and nothing is refreshing it (Paseo-launched agents use the setup token). Run `claude` once without `CLAUDE_CODE_OAUTH_TOKEN` in the environment; Claude Code refreshes the keychain credential and the rows return within 5 min.
 - The pill and dashboard include a manual refresh button. A manual refresh re-queries Codex, Grok, and Cursor immediately; Claude still keeps its 5-minute minimum interval and any active cooldown. After a manual refresh, the button shows a shared 2-minute countdown before it can be pressed again.
 - If a provider's token is mid-rotation (common while agents run), the plugin serves the **last good value** from a small local cache (`$PASEO_HOME/usage-remaining.cache.json`) instead of flickering to "—". Absolute reset timestamps are cached, so countdown labels keep updating even while the provider API is rate-limited.
 - Rows with no data are hidden from the pill but shown in the dashboard.
