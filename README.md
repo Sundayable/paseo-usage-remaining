@@ -14,7 +14,7 @@ Each entry shows the provider logo, remaining %, and time until reset (e.g. `1h 
 | Provider | Source | Notes |
 | --- | --- | --- |
 | Claude (session + weekly + Fable weekly) | Claude Code login (macOS Keychain / `~/.claude/.credentials.json` / `CLAUDE_CODE_OAUTH_TOKEN`) | Fable's model-scoped weekly limit is shown as its own entry |
-| Codex | Codex CLI login (`~/.codex/auth.json`) | Session/weekly windows classified by reset horizon |
+| Codex | Codex CLI login (`~/.codex/auth.json`) | Windows classified by reported length; the 5H row reads 100% while the endpoint omits an unused session window |
 | Grok | Grok CLI login (`~/.grok/auth.json`) | Supports unified-billing (weekly %) and legacy monthly credits |
 | Cursor | Cursor desktop / `cursor-agent` login | Individual plans only — team-billed seats don't expose plan usage |
 
@@ -45,6 +45,7 @@ paseo plugin update usage-remaining
 - The pill and dashboard include a manual refresh button. A manual refresh bypasses the plugin's in-memory refresh throttle, while still respecting each provider's `429 retry-after`. After a manual refresh, the button shows a shared 2-minute countdown before it can be pressed again.
 - If a provider's token is mid-rotation (common while agents run), the plugin serves the **last good value** from a small local cache (`$PASEO_HOME/usage-remaining.cache.json`) instead of flickering to "—". Absolute reset timestamps are cached, so countdown labels keep updating even while the provider API is rate-limited.
 - Rows with no data are hidden from the pill but shown in the dashboard.
+- A cached row is dropped once its own reset time passes, so a stale pre-reset % is never shown next to `now`.
 
 ## Caveats
 
