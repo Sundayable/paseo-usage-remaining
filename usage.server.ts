@@ -113,7 +113,7 @@ function tokenKey(token: string): string {
   return createHash("sha256").update(token).digest("hex").slice(0, 16);
 }
 
-type ClaudeCredential = { token: string; expiresAt: number | null };
+type ClaudeCredential = { token: string; expiresAt: number | null; source: "keychain" | "file" | "env" };
 
 async function readClaudeEnvToken(): Promise<string | undefined> {
   if (process.env.CLAUDE_CODE_OAUTH_TOKEN) return process.env.CLAUDE_CODE_OAUTH_TOKEN;
@@ -133,10 +133,10 @@ async function readClaudeEnvToken(): Promise<string | undefined> {
   return undefined;
 }
 
-function parseClaudeCredential(raw: unknown): ClaudeCredential | null {
+function parseClaudeCredential(raw: unknown, source: ClaudeCredential["source"]): ClaudeCredential | null {
   const oauth = (raw as { claudeAiOauth?: { accessToken?: string; expiresAt?: number } } | null)?.claudeAiOauth;
   if (!oauth?.accessToken) return null;
-  return { token: oauth.accessToken, expiresAt: typeof oauth.expiresAt === "number" ? oauth.expiresAt : null };
+  return { token: oauth.accessToken, expiresAt: typeof oauth.expiresAt === "number" ? oauth.expiresAt : null, source };
 }
 
 async function readClaudeCredentials(): Promise<ClaudeCredential[]> {
@@ -157,15 +157,15 @@ async function readClaudeCredentials(): Promise<ClaudeCredential[]> {
   ]) {
     try {
       const { stdout } = await execFileAsync("security", args, { timeout: 2000 });
-      add(parseClaudeCredential(JSON.parse(stdout.trim())));
+      add(parseClaudeCredential(JSON.parse(stdout.trim()), "keychain"));
     } catch {
       // keep looking
     }
   }
-  add(parseClaudeCredential(await readJson(join(process.env.CLAUDE_HOME || join(home, ".claude"), ".credentials.json"))));
+  add(parseClaudeCredential(await readJson(join(process.env.CLAUDE_HOME || join(home, ".claude"), ".credentials.json")), "file"));
   // Paseo agents authenticate through this long-lived token; keep it as the last resort.
   const envToken = await readClaudeEnvToken();
-  if (envToken) add({ token: envToken, expiresAt: null });
+  if (envToken) add({ token: envToken, expiresAt: null, source: "env" });
   return found;
 }
 
@@ -181,11 +181,15 @@ async function fetchClaude(): Promise<RemainingRow[]> {
   // whole account for an hour when it is polled too often.
   if (rowsStillValid && now - lastClaudeAt < CLAUDE_MIN_INTERVAL_MS) return lastClaudeRows!;
 
-  const tokens = (await readClaudeCredentials())
+  const creds = await readClaudeCredentials();
+  const tokens = creds
     .filter((cred) => cred.expiresAt == null || cred.expiresAt > now + 30_000)
     .map((cred) => cred.token)
     .filter((token) => (claudeTokenCooldownUntil.get(tokenKey(token)) ?? 0) <= now);
-  if (tokens.length === 0) return rowsStillValid ? lastClaudeRows! : fallback;
+  if (tokens.length === 0) {
+    console.log(`[usage-remaining] claude: no usable token (${creds.length} found, all expired or cooling down)`);
+    return rowsStillValid ? lastClaudeRows! : fallback;
+  }
 
   type ClaudeUsageBody = {
     five_hour?: { utilization?: number; resets_at?: string | null };
@@ -207,15 +211,24 @@ async function fetchClaude(): Promise<RemainingRow[]> {
         "anthropic-beta": "oauth-2025-04-20",
       },
     });
-    if (res.status === 401 || res.status === 403) continue;
+    const source = creds.find((c) => c.token === token)?.source ?? "?";
+    if (res.status === 401 || res.status === 403) {
+      console.log(`[usage-remaining] claude: ${res.status} from ${source} token`);
+      continue;
+    }
     if (res.status === 429) {
       const retryAfter = Number(res.headers.get("retry-after"));
       const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : CLAUDE_DEFAULT_COOLDOWN_MS;
       claudeTokenCooldownUntil.set(tokenKey(token), now + waitMs);
       saveCache();
+      console.log(`[usage-remaining] claude: 429 from ${source} token, cooling down ${Math.round(waitMs / 60_000)}m`);
       continue;
     }
-    if (!res.ok) continue;
+    if (!res.ok) {
+      console.log(`[usage-remaining] claude: ${res.status} from ${source} token`);
+      continue;
+    }
+    console.log(`[usage-remaining] claude: ok via ${source} token`);
     body = (await res.json()) as ClaudeUsageBody;
     break;
   }
