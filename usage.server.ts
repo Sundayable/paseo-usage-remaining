@@ -206,6 +206,9 @@ async function fetchClaude(): Promise<RemainingRow[]> {
       const retryAfter = Number(res.headers.get("retry-after"));
       const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : CLAUDE_DEFAULT_COOLDOWN_MS;
       claudeCooldownUntil = now + waitMs;
+      // Persist it: a plugin reload must not spend another request while blocked,
+      // because each attempt during the block appears to extend it.
+      saveCache();
       // Account-wide limit: trying the next token only adds to the count.
       break;
     }
@@ -230,6 +233,7 @@ async function fetchClaude(): Promise<RemainingRow[]> {
   ];
   lastClaudeRows = rows;
   lastClaudeAt = Date.now();
+  saveCache();
   return rows;
 }
 
@@ -448,6 +452,7 @@ async function fetchCursor(): Promise<RemainingRow> {
 // moment and the rows would flicker out. Serve the last good value instead.
 const lastGood = new Map<string, { row: RemainingRow; at: number }>();
 const LAST_GOOD_TTL_MS = 6 * 60 * 60_000;
+const CLAUDE_META_KEY = "_claude";
 const CACHE_PATH = join(process.env.PASEO_HOME || join(home, ".paseo"), "usage-remaining.cache.json");
 let cacheLoaded = false;
 let savePending = false;
@@ -457,8 +462,15 @@ async function loadCache(): Promise<void> {
   cacheLoaded = true;
   const raw = await readJson(CACHE_PATH);
   if (raw && typeof raw === "object") {
-    for (const [id, entry] of Object.entries(raw as Record<string, { row: RemainingRow; at: number }>)) {
-      if (entry && typeof entry.at === "number" && entry.row) lastGood.set(id, entry);
+    for (const [id, entry] of Object.entries(raw as Record<string, unknown>)) {
+      if (id === CLAUDE_META_KEY) {
+        const meta = entry as { cooldownUntil?: number; lastAt?: number } | null;
+        if (typeof meta?.cooldownUntil === "number") claudeCooldownUntil = Math.max(claudeCooldownUntil, meta.cooldownUntil);
+        if (typeof meta?.lastAt === "number") lastClaudeAt = Math.max(lastClaudeAt, meta.lastAt);
+        continue;
+      }
+      const cached = entry as { row?: RemainingRow; at?: number } | null;
+      if (cached && typeof cached.at === "number" && cached.row) lastGood.set(id, { row: cached.row, at: cached.at });
     }
   }
 }
@@ -468,7 +480,8 @@ function saveCache(): void {
   savePending = true;
   setTimeout(() => {
     savePending = false;
-    const obj = Object.fromEntries(lastGood.entries());
+    const obj: Record<string, unknown> = Object.fromEntries(lastGood.entries());
+    obj[CLAUDE_META_KEY] = { cooldownUntil: claudeCooldownUntil, lastAt: lastClaudeAt };
     void writeFile(CACHE_PATH, JSON.stringify(obj)).catch(() => undefined);
   }, 500);
 }
