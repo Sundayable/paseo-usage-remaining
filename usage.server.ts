@@ -124,7 +124,12 @@ async function readClaudeEnvToken(): Promise<string | undefined> {
 
 async function fetchClaude(force = false): Promise<RemainingRow[]> {
   const now = Date.now();
-  if (!force && lastClaudeRows && now - lastClaudeAt < CLAUDE_MIN_INTERVAL_MS) {
+  if (
+    !force &&
+    lastClaudeRows &&
+    now - lastClaudeAt < CLAUDE_MIN_INTERVAL_MS &&
+    !lastClaudeRows.some((r) => cachedWindowHasReset(r, now))
+  ) {
     return lastClaudeRows;
   }
   const tokens: string[] = [];
@@ -443,6 +448,14 @@ function saveCache(): void {
   }, 500);
 }
 
+// A cached row whose window already reset is worse than no data: it would show
+// the pre-reset remaining % next to "now" until the provider API answers again.
+function cachedWindowHasReset(cached: RemainingRow, now: number): boolean {
+  if (!cached.resetIso) return false;
+  const resetMs = new Date(cached.resetIso).getTime();
+  return Number.isFinite(resetMs) && resetMs <= now;
+}
+
 function withLastGood(rows: RemainingRow[]): RemainingRow[] {
   const now = Date.now();
   let updated = false;
@@ -453,7 +466,7 @@ function withLastGood(rows: RemainingRow[]): RemainingRow[] {
       return r;
     }
     const cached = lastGood.get(r.id);
-    if (cached && now - cached.at <= LAST_GOOD_TTL_MS) {
+    if (cached && now - cached.at <= LAST_GOOD_TTL_MS && !cachedWindowHasReset(cached.row, now)) {
       return { ...cached.row };
     }
     return r;
