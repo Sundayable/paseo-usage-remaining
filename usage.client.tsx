@@ -153,14 +153,24 @@ function BrandMark({ row, theme, size }: { row: RemainingRow; theme: Theme; size
   );
 }
 
-function UsageChip({ row, theme, compact }: { row: RemainingRow; theme: Theme; compact: boolean }) {
+function UsageChip({
+  row,
+  theme,
+  compact,
+  showReset = true,
+}: {
+  row: RemainingRow;
+  theme: Theme;
+  compact: boolean;
+  showReset?: boolean;
+}) {
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: compact ? 4 : 8 }}>
       <BrandMark row={row} theme={theme} size={compact ? 14 : 22} />
       <Text style={{ color: toneColor(theme, row.tone), fontSize: compact ? 12 : 18, fontWeight: "700" }}>
         {row.remainingText}
       </Text>
-      {row.resetAt ? (
+      {showReset && row.resetAt ? (
         <Text style={{ color: theme.colors.foregroundMuted, fontSize: compact ? 10 : 13 }}>{row.resetAt}</Text>
       ) : null}
     </View>
@@ -274,8 +284,13 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
   );
 }
 
-export function UsagePill({ theme }: PluginComposerPillProps) {
+export function UsagePill({ theme, layout }: PluginComposerPillProps) {
   const usage = useUsage();
+  // The composer shares its width with other pills; on a phone the row cannot hold
+  // six chips plus their reset labels and the overflow was clipped. `layout.compact`
+  // is the host's own narrow-viewport breakpoint (xs/sm). Measuring our own width
+  // instead would latch: dropping content shrinks the measurement that decided it.
+  const narrow = layout.compact;
   const rows = usage.data?.rows ?? [];
   const session = rows.filter((r) => r.group === "session" && r.status === "available");
   const weekly = rows.filter((r) => r.group === "weekly" && r.status === "available");
@@ -286,32 +301,47 @@ export function UsagePill({ theme }: PluginComposerPillProps) {
       </Text>
     );
   }
+  const groupRow = (label: string, groupRows: RemainingRow[]) => (
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: narrow ? 6 : 8,
+        flexWrap: "wrap",
+        rowGap: 2,
+        flexShrink: 1,
+      }}
+    >
+      <GroupHeader theme={theme} text={label} compact />
+      {groupRows.map((row) => (
+        <UsageChip key={row.id} row={row} theme={theme} compact showReset={!narrow} />
+      ))}
+    </View>
+  );
+
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexShrink: 1, paddingVertical: 1 }}>
-      <View style={{ flexDirection: "column", gap: 2, flexShrink: 1 }}>
-        {session.length > 0 ? (
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <GroupHeader theme={theme} text="5H" compact />
-            {session.map((row) => (
-              <UsageChip key={row.id} row={row} theme={theme} compact />
-            ))}
-          </View>
-        ) : null}
-        {weekly.length > 0 ? (
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <GroupHeader theme={theme} text="WK" compact />
-            {weekly.map((row) => (
-              <UsageChip key={row.id} row={row} theme={theme} compact />
-            ))}
-          </View>
-        ) : null}
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 8,
+        flexShrink: 1,
+        minWidth: 0,
+        paddingVertical: 1,
+      }}
+    >
+      <View style={{ flexDirection: "column", gap: 2, flexShrink: 1, minWidth: 0 }}>
+        {session.length > 0 ? groupRow("5H", session) : null}
+        {weekly.length > 0 ? groupRow("WK", weekly) : null}
       </View>
-      <RefreshButton
-        theme={theme}
-        compact
-        isFetching={usage.isFetching}
-        onRefresh={() => { void usage.manualRefresh(); }}
-      />
+      {narrow ? null : (
+        <RefreshButton
+          theme={theme}
+          compact
+          isFetching={usage.isFetching}
+          onRefresh={() => { void usage.manualRefresh(); }}
+        />
+      )}
     </View>
   );
 }
