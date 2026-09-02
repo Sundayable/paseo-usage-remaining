@@ -347,11 +347,23 @@ export function contributeClient(client: PluginClientContext) {
     pills.delete(agentId);
   }
 
-  void client.paseo.agents.list().then((result: { entries: Array<{ id: string; workspaceId?: string | null }> }) => {
-    for (const entry of result.entries) {
-      if (entry.workspaceId) upsert(entry.id, entry.workspaceId);
+  // The agent list is paginated; walk every page so agents beyond the first
+  // page get a pill too.
+  void (async () => {
+    let cursor: string | undefined;
+    for (let page = 0; page < 50; page += 1) {
+      const result = (await client.paseo.agents.list({ page: { limit: 100, cursor } })) as {
+        entries: Array<{ id: string; workspaceId?: string | null }>;
+        pageInfo?: { nextCursor?: string | null; hasMore?: boolean };
+      };
+      for (const entry of result.entries) {
+        if (entry.workspaceId) upsert(entry.id, entry.workspaceId);
+      }
+      const next = result.pageInfo?.nextCursor ?? undefined;
+      if (!result.pageInfo?.hasMore || !next) break;
+      cursor = next;
     }
-  });
+  })();
 
   const unsubscribe = client.paseo.agents.subscribe((update: AgentUpdate) => {
     if (update.kind === "remove" && "agentId" in update) {
