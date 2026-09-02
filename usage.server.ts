@@ -254,28 +254,40 @@ async function fetchCodex(): Promise<RemainingRow[]> {
   if (!res.ok) throw new Error(`Codex ${res.status}`);
   const text = await res.text();
   if (text.trim().startsWith("<")) return fallback;
+  type CodexWindow = { used_percent?: number; reset_at?: number; limit_window_seconds?: number };
   const body = JSON.parse(text) as {
     rate_limit?: {
-      primary_window?: { used_percent?: number; reset_at?: number };
-      secondary_window?: { used_percent?: number; reset_at?: number };
+      primary_window?: CodexWindow | null;
+      secondary_window?: CodexWindow | null;
     };
   };
   const primary = body.rate_limit?.primary_window;
   const secondary = body.rate_limit?.secondary_window;
   const toIso = (epoch: number | undefined) => (epoch != null ? new Date(epoch * 1000).toISOString() : null);
-  // Codex window semantics vary by plan; classify by reset horizon instead of position.
-  const windows = [primary, secondary].filter((w): w is NonNullable<typeof primary> => w != null);
+  // Codex window semantics vary by plan; classify by window length when the API
+  // reports it, else by reset horizon.
+  const windows = [primary, secondary].filter((w): w is CodexWindow => w != null);
   const rows: RemainingRow[] = [];
   for (const w of windows) {
     const iso = toIso(w.reset_at);
-    const hours = iso ? (new Date(iso).getTime() - Date.now()) / 3_600_000 : null;
-    const isSession = hours != null && hours <= 10;
+    let isSession: boolean;
+    if (typeof w.limit_window_seconds === "number") {
+      isSession = w.limit_window_seconds <= 6 * 3600;
+    } else {
+      const hours = iso ? (new Date(iso).getTime() - Date.now()) / 3_600_000 : null;
+      isSession = hours != null && hours <= 10;
+    }
     const group: Group = isSession ? "session" : "weekly";
     const id = isSession ? "codex_session" : "codex_week";
     if (rows.some((r) => r.id === id)) continue;
     rows.push(row(id, "codex", group, "Codex", remainingFromUsed(w.used_percent), iso));
   }
   if (rows.length === 0) return fallback;
+  // The endpoint omits the 5-hour window entirely while it is unused, so a
+  // weekly-only answer means the session window is full.
+  if (rows.some((r) => r.id === "codex_week") && !rows.some((r) => r.id === "codex_session")) {
+    rows.unshift(row("codex_session", "codex", "session", "Codex", 100, null, "unused"));
+  }
   return rows;
 }
 
