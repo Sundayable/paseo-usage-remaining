@@ -58,7 +58,7 @@ function baseRow(id: string, brand: Brand, group: Group, label: string): Remaini
     remainingPct: null,
     resetAt: null,
     resetIso: null,
-    detail: "unavailable",
+    detail: "not signed in or no usage data",
     tone: "default",
     status: "unavailable",
   };
@@ -478,8 +478,13 @@ function withLastGood(rows: RemainingRow[]): RemainingRow[] {
       return r;
     }
     const cached = lastGood.get(r.id);
-    if (cached && now - cached.at <= LAST_GOOD_TTL_MS && !cachedWindowHasReset(cached.row, now)) {
-      return { ...cached.row };
+    if (cached && now - cached.at <= LAST_GOOD_TTL_MS) {
+      if (cachedWindowHasReset(cached.row, now)) {
+        return { ...r, detail: "window reset · waiting for provider" };
+      }
+      // Never serve a frozen countdown: recompute it, or drop it when the cached
+      // row predates absolute reset timestamps.
+      return { ...cached.row, resetAt: cached.row.resetIso ? resetLabel(cached.row.resetIso) : null };
     }
     return r;
   });
@@ -512,9 +517,7 @@ export async function fetchUsage(input: { force?: boolean } = {}): Promise<Usage
   rows.push(grok.status === "fulfilled" ? grok.value : baseRow("grok_week", "grok", "weekly", "Grok"));
   rows.push(cursor.status === "fulfilled" ? cursor.value : baseRow("cursor_month", "cursor", "weekly", "Cursor"));
 
-  const merged = withLastGood(rows).map((r) =>
-    r.resetIso ? { ...r, resetAt: resetLabel(r.resetIso) } : r,
-  );
+  const merged = withLastGood(rows);
   const session = merged.filter((r) => r.group === "session");
   const weekly = merged.filter((r) => r.group === "weekly");
   return {
