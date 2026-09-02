@@ -97,12 +97,17 @@ async function readJson(path: string): Promise<unknown | null> {
   }
 }
 
-// Anthropic rate-limits the usage endpoint hard for setup tokens; remember cooldowns
-// per token so one 429 does not burn every refresh cycle.
-const tokenCooldownUntil = new Map<string, number>();
+// Anthropic rate-limits the usage endpoint per account (a 429 carries a ~1 hour
+// retry-after and every token of the account gets it), so poll no faster than
+// Paseo's own quota fetcher, treat one 429 as an account-wide cooldown, and never
+// spend a call on a token that is already expired.
+let claudeCooldownUntil = 0;
 let lastClaudeRows: RemainingRow[] | null = null;
 let lastClaudeAt = 0;
-const CLAUDE_MIN_INTERVAL_MS = 120_000;
+const CLAUDE_MIN_INTERVAL_MS = 5 * 60_000;
+const CLAUDE_DEFAULT_COOLDOWN_MS = 60 * 60_000;
+
+type ClaudeCredential = { token: string; expiresAt: number | null };
 
 async function readClaudeEnvToken(): Promise<string | undefined> {
   if (process.env.CLAUDE_CODE_OAUTH_TOKEN) return process.env.CLAUDE_CODE_OAUTH_TOKEN;
@@ -122,22 +127,19 @@ async function readClaudeEnvToken(): Promise<string | undefined> {
   return undefined;
 }
 
-async function fetchClaude(force = false): Promise<RemainingRow[]> {
-  const now = Date.now();
-  if (
-    !force &&
-    lastClaudeRows &&
-    now - lastClaudeAt < CLAUDE_MIN_INTERVAL_MS &&
-    !lastClaudeRows.some((r) => cachedWindowHasReset(r, now))
-  ) {
-    return lastClaudeRows;
-  }
-  const tokens: string[] = [];
+function parseClaudeCredential(raw: unknown): ClaudeCredential | null {
+  const oauth = (raw as { claudeAiOauth?: { accessToken?: string; expiresAt?: number } } | null)?.claudeAiOauth;
+  if (!oauth?.accessToken) return null;
+  return { token: oauth.accessToken, expiresAt: typeof oauth.expiresAt === "number" ? oauth.expiresAt : null };
+}
+
+async function readClaudeCredentials(): Promise<ClaudeCredential[]> {
+  const found: ClaudeCredential[] = [];
   const seen = new Set<string>();
-  const addToken = (token: string | undefined) => {
-    if (token && !seen.has(token)) {
-      seen.add(token);
-      tokens.push(token);
+  const add = (cred: ClaudeCredential | null) => {
+    if (cred && !seen.has(cred.token)) {
+      seen.add(cred.token);
+      found.push(cred);
     }
   };
   const account = /^[a-zA-Z0-9._-]+$/.test(process.env.USER || userInfo().username)
@@ -149,22 +151,34 @@ async function fetchClaude(force = false): Promise<RemainingRow[]> {
   ]) {
     try {
       const { stdout } = await execFileAsync("security", args, { timeout: 2000 });
-      const parsed = JSON.parse(stdout.trim()) as { claudeAiOauth?: { accessToken?: string } };
-      addToken(parsed.claudeAiOauth?.accessToken);
+      add(parseClaudeCredential(JSON.parse(stdout.trim())));
     } catch {
       // keep looking
     }
   }
-  const file = await readJson(join(process.env.CLAUDE_HOME || join(home, ".claude"), ".credentials.json"));
-  addToken((file as { claudeAiOauth?: { accessToken?: string } } | null)?.claudeAiOauth?.accessToken);
+  add(parseClaudeCredential(await readJson(join(process.env.CLAUDE_HOME || join(home, ".claude"), ".credentials.json"))));
   // Paseo agents authenticate through this long-lived token; keep it as the last resort.
-  addToken(await readClaudeEnvToken());
+  const envToken = await readClaudeEnvToken();
+  if (envToken) add({ token: envToken, expiresAt: null });
+  return found;
+}
 
+async function fetchClaude(): Promise<RemainingRow[]> {
+  const now = Date.now();
   const fallback = [
     baseRow("claude_session", "claude", "session", "Claude"),
     baseRow("claude_week", "claude", "weekly", "Claude"),
     baseRow("fable_week", "fable", "weekly", "Fable"),
   ];
+  const rowsStillValid = lastClaudeRows != null && !lastClaudeRows.some((r) => cachedWindowHasReset(r, now));
+  // The minimum interval applies to manual refreshes too: the endpoint blocks the
+  // whole account for an hour when it is polled too often.
+  if (rowsStillValid && now - lastClaudeAt < CLAUDE_MIN_INTERVAL_MS) return lastClaudeRows!;
+  if (now < claudeCooldownUntil) return rowsStillValid ? lastClaudeRows! : fallback;
+
+  const tokens = (await readClaudeCredentials())
+    .filter((cred) => cred.expiresAt == null || cred.expiresAt > now + 30_000)
+    .map((cred) => cred.token);
   if (tokens.length === 0) return fallback;
 
   type ClaudeUsageBody = {
@@ -180,8 +194,6 @@ async function fetchClaude(force = false): Promise<RemainingRow[]> {
   };
   let body: ClaudeUsageBody | null = null;
   for (const token of tokens) {
-    const cooldown = tokenCooldownUntil.get(token);
-    if (cooldown && now < cooldown) continue;
     const res = await fetch("https://api.anthropic.com/api/oauth/usage", {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -192,9 +204,10 @@ async function fetchClaude(force = false): Promise<RemainingRow[]> {
     if (res.status === 401 || res.status === 403) continue;
     if (res.status === 429) {
       const retryAfter = Number(res.headers.get("retry-after"));
-      const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 3_600_000;
-      tokenCooldownUntil.set(token, now + waitMs);
-      continue;
+      const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : CLAUDE_DEFAULT_COOLDOWN_MS;
+      claudeCooldownUntil = now + waitMs;
+      // Account-wide limit: trying the next token only adds to the count.
+      break;
     }
     if (!res.ok) continue;
     body = (await res.json()) as ClaudeUsageBody;
@@ -499,7 +512,7 @@ function pillText(rows: RemainingRow[]): string {
 export async function fetchUsage(input: { force?: boolean } = {}): Promise<UsageSnapshot> {
   await loadCache();
   const [claude, codex, grok, cursor] = await Promise.allSettled([
-    fetchClaude(input.force === true),
+    fetchClaude(),
     fetchCodex(),
     fetchGrok(),
     fetchCursor(),
