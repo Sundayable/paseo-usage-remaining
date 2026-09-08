@@ -1,9 +1,9 @@
-import { type PluginClientContext, type PluginComposerPillProps, type PluginSurfaceProps, useRpc } from "@getpaseo/plugin";
+import { type PluginClientContext, type PluginComposerPillProps, type PluginSurfaceProps, useRpc } from "@getpaseo/plugin/client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Image, Pressable, ScrollView, Text, View } from "react-native";
 import { providerLogos } from "./logos";
-import { listUsage, type RemainingRow, type UsageSnapshot } from "./usage.shared";
+import { listUsage, type RemainingRow, type UsageSnapshot } from "../shared/usage";
 
 type Theme = PluginSurfaceProps["theme"];
 
@@ -382,12 +382,9 @@ export function contributeClient(client: PluginClientContext) {
   void (async () => {
     let cursor: string | undefined;
     for (let page = 0; page < 50; page += 1) {
-      const result = (await client.paseo.agents.list({ page: { limit: 100, cursor } })) as {
-        entries: Array<{ id: string; workspaceId?: string | null }>;
-        pageInfo?: { nextCursor?: string | null; hasMore?: boolean };
-      };
-      for (const entry of result.entries) {
-        if (entry.workspaceId) upsert(entry.id, entry.workspaceId);
+      const result = await client.paseo.agents.list({ page: { limit: 100, cursor } });
+      for (const { agent } of result.entries) {
+        if (agent.workspaceId) upsert(agent.id, agent.workspaceId);
       }
       const next = result.pageInfo?.nextCursor ?? undefined;
       if (!result.pageInfo?.hasMore || !next) break;

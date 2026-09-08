@@ -22,7 +22,7 @@ Everything is read **locally and read-only**. No credentials are written, logged
 
 ## Install
 
-Requires Paseo **0.7.0+**.
+Requires Paseo **0.8.0+** (including 0.8 betas). The last revision for Paseo 0.7 is commit `8e4da65`.
 
 1. In Paseo: **Settings → Plugins → Enable plugins**
 2. In a terminal:
@@ -52,7 +52,7 @@ paseo plugin update usage-remaining
 
 ## Caveats
 
-- Paseo's plugin API is experimental; a Paseo update may require a plugin update.
+- Paseo's plugin API is experimental; a Paseo update may require a plugin update. This revision uses the 0.8 runtime-entry layout (`index.client.tsx` / `index.server.ts`, `client/` `server/` `shared/`) and declares `requirements.paseo >=0.8.0`.
 - Provider usage endpoints are unofficial and can change without notice.
 - Cursor team-billed seats return no plan usage from the endpoint this plugin uses.
 

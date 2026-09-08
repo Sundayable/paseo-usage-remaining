@@ -5,7 +5,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { RemainingRow, UsageSnapshot } from "./usage.shared";
+import type { RemainingRow, UsageSnapshot } from "../shared/usage";
 
 const execFileAsync = promisify(execFile);
 const home = homedir();

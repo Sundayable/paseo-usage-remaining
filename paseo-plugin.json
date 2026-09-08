@@ -1,3 +1,4 @@
 {
-  "id": "usage-remaining"
+  "id": "usage-remaining",
+  "requirements": { "paseo": ">=0.8.0" }
 }
