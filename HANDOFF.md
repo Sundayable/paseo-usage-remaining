@@ -25,7 +25,9 @@ Server credentials and provider fetchers were not changed.
 ## Release
 Repository: https://github.com/Sundayable/paseo-usage-remaining
 Dan requested GitHub update in chat. See git history and remote for release commit.
-GitHub Actions runs typecheck and regression tests on pushes and pull requests.
+The GitHub OAuth login lacks workflow scope, so the optional CI workflow is
+kept at `docs/ci-workflow.example.yml`; it is not installed in GitHub Actions.
+Local typecheck and regression tests passed.
 
 ## Limits and next checks
 This targets stable 0.8.0; early beta or 0.7 clients need an app update.
