@@ -361,10 +361,10 @@ function RichUsageIcon(props: PluginButtonIconProps) {
   const [expanded, setExpanded] = useState(false);
   useLayoutEffect(() => {
     if (props.layout.platform !== "web") return;
-    const cleanup = expandWebComposer(ref.current);
+    const cleanup = expandWebComposer(ref.current, props.theme.colors.surface0);
     setExpanded(cleanup !== null);
     return cleanup ?? undefined;
-  }, [props.layout.platform]);
+  }, [props.layout.platform, props.theme.colors.surface0]);
   return (
     <View ref={ref} style={{ minWidth: 0, flexShrink: 1 }}>
       {expanded ? <UsagePill {...props} /> : (

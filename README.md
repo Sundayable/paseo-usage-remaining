@@ -57,14 +57,21 @@ paseo plugin update usage-remaining
 Paseo 0.8 replaced arbitrary composer components with fixed button descriptors.
 Its normal button forces muted text, a 160px maximum width, and a clipped 16px icon.
 The plugin registers through the supported `button` API, then mounts the original
-React Native usage component in its own web icon slot. `client/web-composer.ts`
-expands only that slot and its enclosing button, hides the duplicate host label,
-and restores every changed style and accessibility attribute on unmount.
+React Native usage component in its own web icon slot. The original button's
+opaque surface, border, and rounded frame remain behind the colored data.
 
-This adapter depends on the observed 0.8.0 web DOM structure. It does not patch the
-Paseo application, query the document, or alter other plugins. If the expected
-structure is missing, it leaves the standard button intact. Native iOS/Android
-clients use that standard fallback; the rich inline layout is desktop/web-only.
+Paseo's track normally floats absolutely over the transcript. A two-row widget
+must not remain in that overlay: `client/web-composer.ts` makes the containing
+track a normal, nonshrinking flex row with an opaque background. The transcript
+viewport gives up exactly the track's height; wrapping provider chips or adjacent
+task/diff badges increases the reserved space instead of covering chat text.
+
+The adapter verifies the expected direct ancestors (including the desktop's
+`display: contents` tooltip wrapper) before expanding anything. It changes only
+this agent's containing track and its own button, and restores all changed styles
+and accessibility attributes on unmount. If safe space cannot be reserved, it
+leaves the standard button intact. Native iOS/Android clients also use that
+standard fallback; the rich inline layout is desktop/web-only.
 Future host changes require rechecking the adapter against the installed app.
 
 ## Caveats
