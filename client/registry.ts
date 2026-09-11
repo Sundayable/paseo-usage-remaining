@@ -1,4 +1,4 @@
-import type { PluginClientContext, PluginButtonRegistration } from "@getpaseo/plugin/client";
+import type { PluginClientContext, PluginButtonRegistration, PluginButtonIcon } from "@getpaseo/plugin/client";
 import type { UsageSnapshot } from "../shared/usage";
 
 type Agent = { id: string; workspaceId?: string | null; provider: string };
@@ -12,7 +12,7 @@ export function usageLabel(provider: string, snapshot?: UsageSnapshot): string {
 }
 
 // Use the SDK shipped with Paseo 0.8.0, not the newer unreleased owned-list API.
-export function registerUsagePills(client: PluginClientContext, fetchUsage: () => Promise<UsageSnapshot>) {
+export function registerUsagePills(client: PluginClientContext, fetchUsage: () => Promise<UsageSnapshot>, icon: PluginButtonIcon = "Gauge") {
   const pills = new Map<string, { agent: Agent; registration: PluginButtonRegistration }>();
   const changedDuringBootstrap = new Set<string>();
   let stopped = false;
@@ -39,7 +39,7 @@ export function registerUsagePills(client: PluginClientContext, fetchUsage: () =
     const registration = client.addComposerPill({
       id: "usage", workspaceId: agent.workspaceId, agentId: agent.id,
       button: {
-        title: "Remaining usage · open all providers", icon: "Gauge", label,
+        title: "Remaining usage · open all providers", icon, label,
         behavior: { kind: "action", onPress() { client.openSurface("main"); } },
       },
     });

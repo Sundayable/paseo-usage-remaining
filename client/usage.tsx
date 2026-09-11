@@ -1,7 +1,9 @@
-import { type PluginClientContext, type PluginSurfaceProps, useRpc } from "@getpaseo/plugin/client";
+import { type PluginClientContext, type PluginSurfaceProps, type PluginButtonIconProps, useRpc } from "@getpaseo/plugin/client";
+import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Image, Pressable, ScrollView, Text, View } from "react-native";
+import { expandWebComposer } from "./web-composer";
 import { registerUsagePills } from "./registry";
 import { providerLogos } from "./logos";
 import { listUsage, type RemainingRow, type UsageSnapshot } from "../shared/usage";
@@ -178,6 +180,22 @@ function UsageChip({
   );
 }
 
+function GroupHeader({ theme, text, compact }: { theme: Theme; text: string; compact: boolean }) {
+  return (
+    <Text
+      style={{
+        color: theme.colors.foregroundMuted,
+        fontSize: compact ? 9 : 12,
+        fontWeight: "700",
+        letterSpacing: 0.6,
+        width: compact ? 22 : undefined,
+      }}
+    >
+      {text}
+    </Text>
+  );
+}
+
 function RemainingBar({ row, theme }: { row: RemainingRow; theme: Theme }) {
   if (row.remainingPct == null) return null;
   return (
@@ -269,6 +287,89 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
   );
 }
 
+export function UsagePill({ theme, layout }: PluginButtonIconProps) {
+  const usage = useUsage();
+  // The composer shares its width with other pills; on a phone the row cannot hold
+  // six chips plus their reset labels and the overflow was clipped. `layout.compact`
+  // is the host's own narrow-viewport breakpoint (xs/sm). Measuring our own width
+  // instead would latch: dropping content shrinks the measurement that decided it.
+  const narrow = layout.compact;
+  const rows = usage.data?.rows ?? [];
+  const session = rows.filter((r) => r.group === "session" && r.status === "available");
+  const weekly = rows.filter((r) => r.group === "weekly" && r.status === "available");
+  if (session.length === 0 && weekly.length === 0) {
+    return (
+      <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted }}>
+        {usage.data ? "Usage unavailable" : "Usage…"}
+      </Text>
+    );
+  }
+  const groupRow = (label: string, groupRows: RemainingRow[]) => (
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: narrow ? 6 : 8,
+        flexWrap: "wrap",
+        rowGap: 2,
+        flexShrink: 1,
+      }}
+    >
+      <GroupHeader theme={theme} text={label} compact />
+      {groupRows.map((row) => (
+        <UsageChip key={row.id} row={row} theme={theme} compact showReset={!narrow} />
+      ))}
+    </View>
+  );
+
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 8,
+        flexShrink: 1,
+        minWidth: 0,
+        paddingVertical: 1,
+      }}
+    >
+      <View style={{ flexDirection: "column", gap: 2, flexShrink: 1, minWidth: 0 }}>
+        {session.length > 0 ? groupRow("5H", session) : null}
+        {weekly.length > 0 ? groupRow("WK", weekly) : null}
+      </View>
+      {narrow ? null : (
+        <RefreshButton
+          theme={theme}
+          compact
+          isFetching={usage.isFetching}
+          onRefresh={() => { void usage.manualRefresh(); }}
+        />
+      )}
+    </View>
+  );
+}
+
 export function contributeClient(client: PluginClientContext) {
-  return registerUsagePills(client, () => client.rpc(listUsage, {}));
+  return registerUsagePills(client, () => client.rpc(listUsage, {}), RichUsageIcon);
+}
+
+// 0.8 removed custom composer bodies. On the web renderer, keep the original
+// two-row component inside our own icon mount and expand only its enclosing
+// button. Native clients keep the supported compact button + full dashboard.
+function RichUsageIcon(props: PluginButtonIconProps) {
+  const ref = useRef<View>(null);
+  const [expanded, setExpanded] = useState(false);
+  useLayoutEffect(() => {
+    if (props.layout.platform !== "web") return;
+    const cleanup = expandWebComposer(ref.current);
+    setExpanded(cleanup !== null);
+    return cleanup ?? undefined;
+  }, [props.layout.platform]);
+  return (
+    <View ref={ref} style={{ minWidth: 0, flexShrink: 1 }}>
+      {expanded ? <UsagePill {...props} /> : (
+        <Icon name="Gauge" size={props.size} color={props.color} />
+      )}
+    </View>
+  );
 }

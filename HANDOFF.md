@@ -1,36 +1,46 @@
 # Usage Remaining — 2026-09-11
 
 ## Goal and state
-Restore missing composer usage in Paseo 0.8.0 and update the GitHub repository.
-Local plugin reloaded and running; desktop composer and dashboard verified.
+Restore the ORIGINAL rich 5H/WK usage display, including all provider logos,
+colored percentages, reset countdowns and refresh. The preceding compact gray
+provider-only fix was rejected by Dan. Original UI recovered from commit 755f745.
 
-## Cause and change
-0.8.0 stable removed the old `Component`/`onPress` composer contribution and
-function cleanup. It now requires `button` plus `update()`/`remove()` registration.
-Pinned all Paseo SDK dev dependencies to 0.8.0 so typecheck catches this mismatch.
-`client/registry.ts` owns paginated bootstrap, live agent updates, usage polling,
-identity-preserving labels, moved/removed agents and teardown race handling.
-The native pill shows the current provider's quota; clicking opens all providers.
-Server credentials and provider fetchers were not changed.
+## Implementation
+- `client/usage.tsx`: restores original UsagePill and GroupHeader, mounted through
+  a custom icon component on the stable 0.8 button API.
+- `client/web-composer.ts`: web-only compatibility adapter expands our direct
+  icon slot and enclosing button, hides duplicate label, restores styles and
+  accessibility state on cleanup; fails closed on a changed host structure.
+- `client/registry.ts`: retains 0.8 registration lifecycle and accepts custom icon.
+- Provider fetchers and credentials are unchanged. No Paseo app patch/restart.
+- Native iOS/Android retain the compact provider-specific fallback + full dashboard.
 
 ## Verification
-- `npm run typecheck`: PASS against 0.8.0 SDK.
-- `npm test`: PASS, 5 lifecycle/label/error regression tests.
-- `git diff --check`: PASS.
-- `paseo plugin reload usage-remaining` + `paseo plugin ls --json`: running.
-- Real local desktop client: Codex weekly percentage visible; pill opens dashboard.
-- Wide desktop and compact desktop window: visually checked in light theme.
-- Physical iPhone / Android and dark theme: NOT_RUN.
+- `npm run typecheck`: PASS against pinned 0.8.0 SDK.
+- `npm test`: PASS, 8 lifecycle/label/error/DOM-adapter regression tests.
+- `paseo plugin reload usage-remaining` and plugin status: running.
+- Actual Mac app: original two rows, provider logos, green/red percentages,
+  reset times and refresh visible; not a gray provider-only pill.
+- Isolated browser fixture uses the actual plugin component with synthetic usage
+  and the observed host button structure. At 390px: all six available rows fit,
+  document scrollWidth equals viewport width; reset labels hidden as designed.
+- Browser fixture at 1200px with dark theme: color/contrast and reset labels pass.
+- Inline refresh starts the 2-minute cooldown without opening the dashboard;
+  clicking the usage body opens the dashboard. Both checked in browser fixture.
+- Actual physical iOS/Android app: NOT_RUN; rich inline adapter is web-only.
 
-## Release
-Repository: https://github.com/Sundayable/paseo-usage-remaining
-Dan requested GitHub update in chat. See git history and remote for release commit.
-The GitHub OAuth login lacks workflow scope, so the optional CI workflow is
-kept at `docs/ci-workflow.example.yml`; it is not installed in GitHub Actions.
-Local typecheck and regression tests passed.
+## QA fixture
+Temporary local-only harness: /tmp/paseo-rich-usage-qa.nhLV48
+No credentials or production API calls. Synthetic fixture values only.
 
-## Limits and next checks
-This targets stable 0.8.0; early beta or 0.7 clients need an app update.
-The current public docs describe a newer owned subscription API than the published
-0.8.0 SDK. Keep the installed SDK contract until the app/runtime is upgraded.
-Do not restart the daemon to reload this plugin; active agents must be preserved.
+## GitHub
+https://github.com/Sundayable/paseo-usage-remaining
+Dan's earlier instruction to update GitHub remains in scope for the corrected UI.
+The optional CI workflow is docs/ci-workflow.example.yml because the current
+GitHub OAuth login lacks workflow scope. CI is not active; local checks pass.
+
+## Risks
+The web compatibility adapter uses the observed direct-parent structure because
+Paseo 0.8 removed arbitrary composer components. A future host layout change may
+fall back to the standard button. Recheck after Paseo upgrades. SDK types remain
+pinned to actual stable 0.8.0; current online docs include newer subscription APIs.
