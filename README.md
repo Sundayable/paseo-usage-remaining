@@ -2,12 +2,13 @@
 
 A [Paseo](https://paseo.sh) plugin that shows how much AI usage you have **left** — right above the composer.
 
-Two lines, always visible while you work:
+The composer pill shows the current agent's provider and remaining quota, for example
+`Claude · 5H 89% · WK 94%` or `Codex · WK 92%`. Click it for the complete dashboard
+with all providers, Fable's weekly limit, progress bars, and reset times. The dashboard
+also opens from the **Remaining** sidebar item and the Command Center.
 
-- **5H** — 5-hour session limits (Claude, Codex when active)
-- **WK** — weekly limits (Claude, Fable, Codex, Grok) and Cursor's monthly plan
-
-Each entry shows the provider logo, remaining %, and time until reset (e.g. `1h 23m` under 24 hours, or `1d 6h`). Click the pill for a full dashboard, or open it from the sidebar ("Remaining") and the Command Center.
+The compact provider-specific label fits narrow composers without hiding the usage
+value behind a row of logos.
 
 ## What it reads
 
@@ -22,7 +23,7 @@ Everything is read **locally and read-only**. No credentials are written, logged
 
 ## Install
 
-Requires Paseo **0.8.0+** (including 0.8 betas). The last revision for Paseo 0.7 is commit `8e4da65`.
+Requires Paseo **0.8.0 stable** on the daemon and client. Early 0.8 betas use an older composer API. The last revision for Paseo 0.7 is commit `8e4da65`.
 
 1. In Paseo: **Settings → Plugins → Enable plugins**
 2. In a terminal:
@@ -43,16 +44,16 @@ paseo plugin update usage-remaining
 
 - Refreshes every 60s. Claude is polled at most every 5 min. Anthropic's usage endpoint answers `429` (retry-after about an hour) for tokens it will not serve: expired access tokens and long-lived `claude setup-token` tokens. A fresh token from an interactive Claude Code login answers normally. The plugin skips expired tokens without a request, prefers keychain/file tokens over the env setup token, and remembers a per-token cooldown across reloads.
 - If the Claude rows stay hidden, the keychain token has expired and nothing is refreshing it (Paseo-launched agents use the setup token). Run `claude` once without `CLAUDE_CODE_OAUTH_TOKEN` in the environment; Claude Code refreshes the keychain credential and the rows return within 5 min.
-- The pill and dashboard include a manual refresh button. A manual refresh re-queries Codex, Grok, and Cursor immediately; Claude still keeps its 5-minute minimum interval and any active cooldown. After a manual refresh, the button shows a shared 2-minute countdown before it can be pressed again.
+- The dashboard includes a manual refresh button. A manual refresh re-queries Codex, Grok, and Cursor immediately; Claude still keeps its 5-minute minimum interval and any active cooldown. After a manual refresh, the button shows a shared 2-minute countdown before it can be pressed again.
 - If a provider's token is mid-rotation (common while agents run), the plugin serves the **last good value** from a small local cache (`$PASEO_HOME/usage-remaining.cache.json`) instead of flickering to "—". Absolute reset timestamps are cached, so countdown labels keep updating even while the provider API is rate-limited.
-- Rows with no data are hidden from the pill but shown in the dashboard.
-- On a narrow screen (the host's compact breakpoint, e.g. the phone app) the pill drops the reset labels and its refresh button so the chips are not clipped; tap the pill for the dashboard, which shows both.
-- Paseo caches plugin UI code in the app. After changing a client-side file, reopen the Paseo app; `paseo plugin reload` alone updates only the server side.
+- Provider windows with no data are omitted from the pill and explained in the dashboard. If none are available, the clickable pill says `Usage unavailable`.
+- The pill uses Paseo 0.8's native button descriptor and updates its label in place. Click it on desktop or mobile for the full dashboard.
+- Source changes require `npm run typecheck` followed by `paseo plugin reload usage-remaining`. The 0.8.0 desktop client updates without a daemon restart.
 - A cached row is dropped once its own reset time passes, so a stale pre-reset % is never shown next to `now`.
 
 ## Caveats
 
-- Paseo's plugin API is experimental; a Paseo update may require a plugin update. This revision uses the 0.8 runtime-entry layout (`index.client.tsx` / `index.server.ts`, `client/` `server/` `shared/`) and declares `requirements.paseo >=0.8.0`.
+- Paseo's plugin API is experimental; a Paseo update may require a plugin update. This revision uses the stable 0.8 button registration API (`button`, `update`, `remove`) and runtime-entry layout (`index.client.tsx` / `index.server.ts`, `client/` `server/` `shared/`) and declares `requirements.paseo >=0.8.0`.
 - Provider usage endpoints are unofficial and can change without notice.
 - Cursor team-billed seats return no plan usage from the endpoint this plugin uses.
 
@@ -63,3 +64,17 @@ Provider endpoint and credential-file handling is based on Paseo's own open-sour
 ## License
 
 MIT
+
+## Development
+
+```bash
+npm ci
+npm run typecheck
+npm test
+paseo plugin reload usage-remaining
+```
+
+Tests use Node.js 22.18+ native TypeScript stripping. They cover paginated agent
+bootstrap, live updates, moving/removing agents, teardown races, and unavailable usage.
+SDK dependencies are pinned to the installed stable Paseo 0.8.0 API; the live docs may
+show a newer subscription API that is not yet in that release.

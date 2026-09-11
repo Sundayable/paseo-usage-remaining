@@ -1,7 +1,8 @@
-import { type PluginClientContext, type PluginComposerPillProps, type PluginSurfaceProps, useRpc } from "@getpaseo/plugin/client";
+import { type PluginClientContext, type PluginSurfaceProps, useRpc } from "@getpaseo/plugin/client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Image, Pressable, ScrollView, Text, View } from "react-native";
+import { registerUsagePills } from "./registry";
 import { providerLogos } from "./logos";
 import { listUsage, type RemainingRow, type UsageSnapshot } from "../shared/usage";
 
@@ -177,22 +178,6 @@ function UsageChip({
   );
 }
 
-function GroupHeader({ theme, text, compact }: { theme: Theme; text: string; compact: boolean }) {
-  return (
-    <Text
-      style={{
-        color: theme.colors.foregroundMuted,
-        fontSize: compact ? 9 : 12,
-        fontWeight: "700",
-        letterSpacing: 0.6,
-        width: compact ? 22 : undefined,
-      }}
-    >
-      {text}
-    </Text>
-  );
-}
-
 function RemainingBar({ row, theme }: { row: RemainingRow; theme: Theme }) {
   if (row.remainingPct == null) return null;
   return (
@@ -284,127 +269,6 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
   );
 }
 
-export function UsagePill({ theme, layout }: PluginComposerPillProps) {
-  const usage = useUsage();
-  // The composer shares its width with other pills; on a phone the row cannot hold
-  // six chips plus their reset labels and the overflow was clipped. `layout.compact`
-  // is the host's own narrow-viewport breakpoint (xs/sm). Measuring our own width
-  // instead would latch: dropping content shrinks the measurement that decided it.
-  const narrow = layout.compact;
-  const rows = usage.data?.rows ?? [];
-  const session = rows.filter((r) => r.group === "session" && r.status === "available");
-  const weekly = rows.filter((r) => r.group === "weekly" && r.status === "available");
-  if (session.length === 0 && weekly.length === 0) {
-    return (
-      <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted }}>
-        {usage.data ? "Usage unavailable" : "Usage…"}
-      </Text>
-    );
-  }
-  const groupRow = (label: string, groupRows: RemainingRow[]) => (
-    <View
-      style={{
-        flexDirection: "row",
-        alignItems: "center",
-        gap: narrow ? 6 : 8,
-        flexWrap: "wrap",
-        rowGap: 2,
-        flexShrink: 1,
-      }}
-    >
-      <GroupHeader theme={theme} text={label} compact />
-      {groupRows.map((row) => (
-        <UsageChip key={row.id} row={row} theme={theme} compact showReset={!narrow} />
-      ))}
-    </View>
-  );
-
-  return (
-    <View
-      style={{
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 8,
-        flexShrink: 1,
-        minWidth: 0,
-        paddingVertical: 1,
-      }}
-    >
-      <View style={{ flexDirection: "column", gap: 2, flexShrink: 1, minWidth: 0 }}>
-        {session.length > 0 ? groupRow("5H", session) : null}
-        {weekly.length > 0 ? groupRow("WK", weekly) : null}
-      </View>
-      {narrow ? null : (
-        <RefreshButton
-          theme={theme}
-          compact
-          isFetching={usage.isFetching}
-          onRefresh={() => { void usage.manualRefresh(); }}
-        />
-      )}
-    </View>
-  );
-}
-
-function addPill(client: PluginClientContext, agentId: string, workspaceId: string) {
-  return client.addComposerPill({
-    id: "usage",
-    title: "Remaining usage",
-    workspaceId,
-    agentId,
-    Component: UsagePill,
-    onPress() {
-      client.openSurface("main");
-    },
-  });
-}
-
-type AgentUpdate =
-  | { kind: "upsert"; agent?: { id: string; workspaceId?: string | null } }
-  | { kind: "remove"; agentId: string }
-  | { kind?: string };
-
 export function contributeClient(client: PluginClientContext) {
-  const pills = new Map<string, () => void>();
-
-  function upsert(agentId: string, workspaceId: string) {
-    pills.get(agentId)?.();
-    pills.set(agentId, addPill(client, agentId, workspaceId));
-  }
-
-  function remove(agentId: string) {
-    pills.get(agentId)?.();
-    pills.delete(agentId);
-  }
-
-  // The agent list is paginated; walk every page so agents beyond the first
-  // page get a pill too.
-  void (async () => {
-    let cursor: string | undefined;
-    for (let page = 0; page < 50; page += 1) {
-      const result = await client.paseo.agents.list({ page: { limit: 100, cursor } });
-      for (const { agent } of result.entries) {
-        if (agent.workspaceId) upsert(agent.id, agent.workspaceId);
-      }
-      const next = result.pageInfo?.nextCursor ?? undefined;
-      if (!result.pageInfo?.hasMore || !next) break;
-      cursor = next;
-    }
-  })();
-
-  const unsubscribe = client.paseo.agents.subscribe((update: AgentUpdate) => {
-    if (update.kind === "remove" && "agentId" in update) {
-      remove(update.agentId);
-      return;
-    }
-    if (update.kind === "upsert" && "agent" in update && update.agent?.workspaceId) {
-      upsert(update.agent.id, update.agent.workspaceId);
-    }
-  });
-
-  return () => {
-    unsubscribe();
-    for (const dispose of pills.values()) dispose();
-    pills.clear();
-  };
+  return registerUsagePills(client, () => client.rpc(listUsage, {}));
 }
