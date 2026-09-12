@@ -95,3 +95,30 @@ The original colored logos and ALL available limits must stay visible above inpu
 - Android and native dark mode NOT_RUN. Prior statements that physical iOS was
   unavailable are superseded by this actual physical-device verification.
 - Temporary native diagnostic text was removed; no credentials/log data exposed.
+
+## 2026-09-11 later: left-aligned strip and hidden host diff badge
+Dan's phone screenshot showed the two rows centered inside the pill (equal ~33pt
+gutters) and asked to drop Paseo's own `+928 -45` git badge from the composer.
+
+- Cause of the gutter: Paseo's plugin icon slot style is
+  `{width:16,height:16,alignItems:'center',justifyContent:'center',overflow:'hidden'}`.
+  Once the adapter widens that slot, its `alignItems:'center'` centers our rows.
+  `client/native-composer.ts` now also patches `alignItems:'flex-start'`, so the
+  rows start at the button's own text edge. Cleanup restores `center`.
+- The diff badge is the host's `testID="composer-diff-stat-pill"` (0.8 renders it
+  from `useVisibleWorkspaceDiffStat`; there is no user setting). The native adapter
+  hides that node with `display:'none'`. It mounts only while the workspace has
+  changes and re-renders on every count change, so a 400ms timer re-applies the
+  style when `canonical.currentProps` identity changes and rescans the track every
+  5 ticks to catch mount/unmount/remount. Cleanup clears the timer and restores it.
+- Scope: native only. Desktop/web keep the diff badge; the web slot is width:auto
+  and already left-aligned, so `web-composer.ts` is unchanged.
+- A missing or unpatchable badge never blocks the usage strip.
+
+### Verification
+- `npx tsc --noEmit`: PASS. `npm test`: PASS, 19 tests (3 new: hide+restore,
+  re-render/remount re-hide, missing badge stays harmless).
+- `paseo plugin reload usage-remaining`: running.
+- Physical iPhone: NOT_RUN. iPhone Mirroring reports "iPhone in Use"; the device
+  must be locked before the mirrored check can run. Do not claim visual acceptance
+  until the phone shows the rows flush left and no `+/-` badge.

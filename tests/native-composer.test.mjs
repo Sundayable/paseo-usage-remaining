@@ -11,14 +11,16 @@ function fixture() {
     return fiber;
   }
   const root = host({});
-  const slot = host({width:16,height:16,overflow:'hidden'});
+  const slot = host({width:16,height:16,overflow:'hidden',alignItems:'center'});
   const button = host({maxWidth:160}, {accessibilityRole:'button'});
   const track = host({width:'100%',flexDirection:'row'});
   const bar = host({position:'absolute',bottom:0,left:0,right:0});
   const label = host({color:'#777'}, {numberOfLines:1,children:'Codex · WK 86%'});
+  const diff = host({}, {testID:'composer-diff-stat-pill'});
   root.return=slot;slot.return=button;button.return=track;track.return=bar;
   button.child=slot;slot.child=root;slot.sibling=label;
-  return {hosts,slot,bar,mount:{__internalInstanceHandle:root,setNativeProps(){} }};
+  track.child=button;button.sibling=diff;
+  return {hosts,slot,bar,track,diff,mount:{__internalInstanceHandle:root,setNativeProps(){} }};
 }
 test('native rich display reserves track space, hides only host label, and restores on cleanup',()=>{
   const f=fixture();
@@ -27,12 +29,49 @@ test('native rich display reserves track space, hides only host label, and resto
   assert.equal(f.hosts[4].calls[0].style.position,'relative');
   assert.equal(f.hosts[4].calls[0].style.flexShrink,0);
   assert.equal(f.hosts[1].calls[0].style.width,332);
+  assert.equal(f.hosts[1].calls[0].style.alignItems,'flex-start');
   assert.equal(f.hosts[5].calls[0].style.display,'none');
   cleanup();cleanup();
   assert.equal(f.hosts[4].calls.length,2);
   assert.equal(f.hosts[4].calls[1].style.position,'absolute');
   assert.equal(f.hosts[1].calls[1].style.width,16);
+  assert.equal(f.hosts[1].calls[1].style.alignItems,'center');
   assert.equal(f.hosts[5].calls[1].style.display,null);
+});
+
+test("the host's diff badge is hidden while expanded and restored on cleanup",()=>{
+  const f=fixture();
+  const cleanup=expandNativeComposer(f.mount,358,'#fff',s=>s);
+  assert.deepEqual(f.hosts[6].calls,[{style:{display:'none'}}]);
+  cleanup();
+  assert.deepEqual(f.hosts[6].calls.at(-1),{style:{display:null}});
+});
+
+test('a diff badge that re-renders or remounts is hidden again',async()=>{
+  const f=fixture();
+  const cleanup=expandNativeComposer(f.mount,358,'#fff',s=>s);
+  try {
+    // The host commits new counts; React restores its own style over ours.
+    f.hosts[6].fiber.stateNode.canonical.currentProps={style:{}};
+    await new Promise(resolve=>setTimeout(resolve,600));
+    assert.equal(f.hosts[6].calls.length,2);
+    assert.deepEqual(f.hosts[6].calls.at(-1),{style:{display:'none'}});
+    // Zero changes unmount the badge; a later edit mounts a fresh host instance.
+    const calls=[];
+    f.hosts[6].fiber.stateNode.canonical={publicInstance:{setNativeProps:value=>calls.push(value)}};
+    await new Promise(resolve=>setTimeout(resolve,2400));
+    assert.deepEqual(calls,[{style:{display:'none'}}]);
+  } finally { cleanup(); }
+});
+
+test('a missing diff badge leaves the rest of the expansion intact',()=>{
+  const f=fixture();
+  f.diff.memoizedProps.testID='other-pill';
+  const cleanup=expandNativeComposer(f.mount,358,'#fff',s=>s);
+  assert.equal(typeof cleanup,'function');
+  assert.equal(f.hosts[6].calls.length,0);
+  cleanup();
+  assert.equal(f.hosts[6].calls.length,0);
 });
 test('unknown native refs or changed geometry are untouched',()=>{
   assert.equal(expandNativeComposer({},358,'#fff',s=>s),null);
