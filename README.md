@@ -57,6 +57,10 @@ paseo plugin update usage-remaining
 - The original rich display uses the 0.8 web compatibility adapter described below. Native clients use a guarded native adapter to restore the same colored two-row display, with a scrollable sheet on tap.
 - Source changes require `npm run typecheck` followed by `paseo plugin reload usage-remaining`. The 0.8.0 desktop client updates without a daemon restart.
 - A cached row is dropped once its own reset time passes, so a stale pre-reset % is never shown next to `now`.
+- On native clients the plugin hides Paseo's own git diff badge (`+123 -45`) from the
+  composer track, so the phone shows usage only. Paseo 0.8 has no setting for that
+  badge, so the native adapter hides the node and restores it when the plugin is
+  disabled or unloaded. Desktop and web keep the badge.
 
 ## Paseo 0.8 web compatibility
 
@@ -77,7 +81,9 @@ The adapter verifies the expected direct ancestors (including the desktop's
 this agent's containing track and its own button, and restores all changed styles
 and accessibility attributes on unmount. If safe space cannot be reserved, it
 leaves the standard button intact. Native clients use `client/native-composer.ts` to expand the owned native icon slot
-and reserve track height through `setNativeProps`. It validates the observed Fabric
+and reserve track height through `setNativeProps`. The host icon slot centers its
+single child, so the adapter also sets `alignItems: 'flex-start'` and the two rows
+start at the button's own text edge instead of sitting in a wide centered gutter. It validates the observed Fabric
 host structure before touching any styles and restores changed properties on
 teardown. This relies on internal React Native host handles; unknown structures
 retain the standard button and sheet. Actual iPhone verification covered the
