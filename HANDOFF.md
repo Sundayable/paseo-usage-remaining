@@ -21,12 +21,15 @@ therefore did not test the actual overlap failure. Its PASS was insufficient.
 - Cleanup restores all styles/attributes and is idempotent. A theme change cleans
   up and reapplies safely. Unknown geometry keeps the standard fallback.
 - Provider data, credentials, drafts and application binary remain unchanged.
-- Native iOS/Android still use the standard compact button + dashboard.
+- Native iOS/Android now open MobileUsageSheet using the supported popover API.
+  The host owns sheet scrolling/safe areas; shared UsageContent avoids nested scroll
+  containers. Cards show provider names and a single reset label; narrow headers
+  stack above a 44px refresh button. Refresh failures retain values and show errors.
 
 ## Verification
 - `npm run typecheck`: PASS.
-- `npm test`: PASS, 11 tests including real tooltip wrapper, space reservation,
-  safe fallback, cleanup and theme remount, plus registration lifecycle tests.
+- `npm test`: PASS, 12 tests including real tooltip wrapper, space reservation,
+  safe fallback, cleanup and theme remount, plus registration lifecycle and native sheet registration tests.
 - `paseo plugin reload usage-remaining`: running.
 - Real Mac Paseo screenshot: long finished response and footer above a separate
   framed usage panel; neighboring '6 subagents' pill and draft input stay clear.
@@ -52,3 +55,18 @@ Recheck transcript, footer, track, neighboring badges and draft TOGETHER on futu
 Paseo upgrades. Widget-only screenshots cannot prove absence of overlap.
 The adapter depends on the observed 0.8.0 DOM; unknown layouts use safe fallback.
 Do not restart the daemon; reload only the plugin to preserve active agents.
+
+## Mobile follow-up verification
+- Native-selected component rendered with React Native Web and synthetic data:
+  320x568 light, 390x844 dark. This is browser component QA, not a native app run.
+- 320px sheet content width/scrollWidth 305/305 (15px browser scrollbar), scroll
+  height 754 in 440px host fixture. Last card bottom 552 <= viewport bottom 568.
+- Provider names Claude, Fable, Codex, Grok, Cursor and all six limits present.
+- Refresh height 44px; click enters disabled shared 2:00 cooldown.
+- Simulated refresh failure shows error while retaining the last good percentages.
+- Final web regression: 320px tail bottom 320.06 <= bar top 336; bar bottom/input
+  top 456. 1200px dark tail 659.72 <= bar 676; bar bottom/input 738. No horizontal
+  overflow. Desktop keeps the original colored two-row display.
+- No booted simulator or connected device was listed by simctl/devicectl.
+  Physical iOS/Android remains NOT_RUN; relay client version alone is not evidence.
+- Current user authorization: “뭐 다 하고 깃허브까지 마무리 짓고”.

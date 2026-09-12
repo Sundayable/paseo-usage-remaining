@@ -78,3 +78,20 @@ test('usage failure leaves a visible, clickable unavailable state', async () => 
     assert.equal(f.state.opened, 'main');
   } finally { stop(); }
 });
+
+test('native sheet remains available after refresh, agent updates and provider failure', async () => {
+  const f = fixture(async () => ({ entries: [{ agent: agent('a') }], pageInfo: {} }));
+  const Content = () => null;
+  const stop = registerUsagePills(f.client, async () => { throw Error('offline'); }, 'Gauge', Content);
+  try {
+    await tick();
+    const button = f.created[0].input.button;
+    assert.equal(button.behavior.kind, 'popover');
+    assert.equal(button.behavior.Content, Content);
+    assert.equal(f.created[0].patches.at(-1).label, 'Usage unavailable');
+    f.update({ kind: 'upsert', agent: agent('a') });
+    assert.equal(f.created.length, 1);
+    assert.equal(button.behavior.Content, Content);
+    assert.equal(f.state.opened, null);
+  } finally { stop(); }
+});

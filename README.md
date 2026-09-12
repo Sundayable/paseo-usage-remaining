@@ -11,6 +11,12 @@ Green, yellow, and red percentages show remaining capacity. Refresh inline, or c
 for the full dashboard. On narrow web screens the reset labels and refresh button
 move out of the inline display; all providers still fit, and the dashboard has details.
 
+On iOS/Android, tap the usage button to open all providers in a scrollable sheet.
+Cards show each provider’s logo and name, colored remaining capacity, and one reset
+label. Narrow screens stack the header above a 44px refresh button. The full
+dashboard uses the same responsive cards. Failed refreshes preserve the last values
+and show an error.
+
 ## What it reads
 
 | Provider | Source | Notes |
@@ -48,7 +54,7 @@ paseo plugin update usage-remaining
 - The wide inline display and dashboard include a manual refresh button. A manual refresh re-queries Codex, Grok, and Cursor immediately; Claude still keeps its 5-minute minimum interval and any active cooldown. After a manual refresh, the button shows a shared 2-minute countdown before it can be pressed again.
 - If a provider's token is mid-rotation (common while agents run), the plugin serves the **last good value** from a small local cache (`$PASEO_HOME/usage-remaining.cache.json`) instead of flickering to "—". Absolute reset timestamps are cached, so countdown labels keep updating even while the provider API is rate-limited.
 - Provider windows with no data are omitted from the inline display and explained in the dashboard. If none are available, it says `Usage unavailable`.
-- The original rich display uses the 0.8 web compatibility adapter described below. Native clients retain the supported compact provider-specific button that opens the full dashboard.
+- The original rich display uses the 0.8 web compatibility adapter described below. Native iOS/Android clients use a compact provider-specific button that opens a scrollable all-provider sheet.
 - Source changes require `npm run typecheck` followed by `paseo plugin reload usage-remaining`. The 0.8.0 desktop client updates without a daemon restart.
 - A cached row is dropped once its own reset time passes, so a stale pre-reset % is never shown next to `now`.
 
@@ -71,7 +77,7 @@ The adapter verifies the expected direct ancestors (including the desktop's
 this agent's containing track and its own button, and restores all changed styles
 and accessibility attributes on unmount. If safe space cannot be reserved, it
 leaves the standard button intact. Native iOS/Android clients also use that
-standard fallback; the rich inline layout is desktop/web-only.
+standard button with a native scrollable sheet; the rich inline layout is desktop/web-only.
 Future host changes require rechecking the adapter against the installed app.
 
 ## Caveats

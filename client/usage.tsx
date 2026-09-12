@@ -1,8 +1,8 @@
-import { type PluginClientContext, type PluginSurfaceProps, type PluginButtonIconProps, useRpc } from "@getpaseo/plugin/client";
+import { type PluginClientContext, type PluginSurfaceProps, type PluginButtonIconProps, type PluginButtonContentProps, useRpc } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Image, Pressable, ScrollView, Text, View } from "react-native";
+import { Image, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { expandWebComposer } from "./web-composer";
 import { registerUsagePills } from "./registry";
 import { providerLogos } from "./logos";
@@ -24,6 +24,8 @@ function toneColor(theme: Theme, tone: RemainingRow["tone"]): string {
 function useUsage() {
   const list = useRpc(listUsage);
   const queryClient = useQueryClient();
+  const [refreshError, setRefreshError] = useState<Error | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const query = useQuery({
     queryKey: QUERY_KEY,
     queryFn: () => list({}),
@@ -32,10 +34,18 @@ function useUsage() {
   });
   return {
     ...query,
+    isFetching: query.isFetching || refreshing,
+    isError: query.isError || refreshError !== null,
+    error: refreshError ?? query.error,
     manualRefresh: async () => {
-      const data = await list({ force: true });
-      queryClient.setQueryData<UsageSnapshot>(QUERY_KEY, data);
-      return data;
+      setRefreshing(true);
+      setRefreshError(null);
+      try {
+        const data = await list({ force: true });
+        queryClient.setQueryData<UsageSnapshot>(QUERY_KEY, data);
+      } catch {
+        setRefreshError(new Error("Could not refresh usage. Try again shortly."));
+      } finally { setRefreshing(false); }
     },
   };
 }
@@ -116,7 +126,7 @@ function RefreshButton({
       }}
       style={{
         minWidth: compact ? 32 : 76,
-        height: compact ? 24 : 34,
+        minHeight: compact ? 24 : 44,
         paddingHorizontal: compact ? 6 : 12,
         borderRadius: compact ? 7 : 9,
         borderWidth: 1,
@@ -137,10 +147,10 @@ function RefreshButton({
   );
 }
 
-function BrandMark({ row, theme, size }: { row: RemainingRow; theme: Theme; size: number }) {
+function BrandMark({ row, theme, size, showLabel = false }: { row: RemainingRow; theme: Theme; size: number; showLabel?: boolean }) {
   const logoKey = row.brand === "fable" ? "claude" : row.brand;
   const uri = providerLogos[logoKey];
-  const showName = row.brand === "fable" || !uri;
+  const showName = showLabel || row.brand === "fable" || !uri;
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
       {uri ? <Image source={{ uri }} style={{ width: size, height: size, borderRadius: size * 0.22 }} /> : null}
@@ -223,9 +233,12 @@ function UsageCard({ row, theme, compact }: { row: RemainingRow; theme: Theme; c
       }}
     >
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-        <UsageChip row={row} theme={theme} compact={false} />
+        <BrandMark row={row} theme={theme} size={22} showLabel />
+        <Text style={{ color: toneColor(theme, row.tone), fontSize: 18, fontWeight: "700", flexShrink: 1 }}>{row.remainingText}</Text>
+      </View>
+      <View>
         {row.resetAt ? (
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>resets in {row.resetAt}</Text>
+          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12, marginTop: 6 }}>Resets in {row.resetAt}</Text>
         ) : null}
       </View>
       <RemainingBar row={row} theme={theme} />
@@ -236,7 +249,7 @@ function UsageCard({ row, theme, compact }: { row: RemainingRow; theme: Theme; c
   );
 }
 
-export function MainSurface({ theme, layout }: PluginSurfaceProps) {
+function UsageContent({ theme, layout }: Pick<PluginSurfaceProps, "theme" | "layout">) {
   const usage = useUsage();
   const now = useNow(15_000);
   const rows = usage.data?.rows ?? [];
@@ -260,9 +273,9 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
   );
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: theme.colors.surface0 }} contentContainerStyle={styles.screen}>
-      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-        <View style={{ gap: 2 }}>
+    <View style={styles.screen}>
+      <View style={{ flexDirection: layout.compact ? "column" : "row", alignItems: layout.compact ? "stretch" : "center", justifyContent: "space-between", gap: 12 }}>
+        <View style={{ gap: 2, flexShrink: 1 }}>
           <Text style={styles.title}>Remaining usage</Text>
           {updated ? <Text style={styles.subtitle}>Updated {updated} · auto-refreshes every minute</Text> : null}
         </View>
@@ -283,8 +296,17 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
       {weekly.map((row) => (
         <UsageCard key={row.id} row={row} theme={theme} compact={layout.compact} />
       ))}
-    </ScrollView>
+    </View>
   );
+}
+
+export function MainSurface(props: PluginSurfaceProps) {
+  return <ScrollView style={{ flex: 1, backgroundColor: props.theme.colors.surface0 }}><UsageContent {...props} /></ScrollView>;
+}
+
+// Paseo supplies the native sheet scrolling and safe-area handling.
+export function MobileUsageSheet(props: PluginButtonContentProps) {
+  return <UsageContent theme={props.theme} layout={{ ...props.layout, compact: true }} />;
 }
 
 export function UsagePill({ theme, layout }: PluginButtonIconProps) {
@@ -350,12 +372,12 @@ export function UsagePill({ theme, layout }: PluginButtonIconProps) {
 }
 
 export function contributeClient(client: PluginClientContext) {
-  return registerUsagePills(client, () => client.rpc(listUsage, {}), RichUsageIcon);
+  return registerUsagePills(client, () => client.rpc(listUsage, {}), RichUsageIcon, Platform.OS === "web" ? undefined : MobileUsageSheet);
 }
 
 // 0.8 removed custom composer bodies. On the web renderer, keep the original
 // two-row component inside our own icon mount and expand only its enclosing
-// button. Native clients keep the supported compact button + full dashboard.
+// button. Native clients open a scrollable sheet from the supported compact button.
 function RichUsageIcon(props: PluginButtonIconProps) {
   const ref = useRef<View>(null);
   const [expanded, setExpanded] = useState(false);
