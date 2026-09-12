@@ -70,3 +70,28 @@ Do not restart the daemon; reload only the plugin to preserve active agents.
 - No booted simulator or connected device was listed by simctl/devicectl.
   Physical iOS/Android remains NOT_RUN; relay client version alone is not evidence.
 - Current user authorization: “뭐 다 하고 깃허브까지 마무리 짓고”.
+
+## Corrected native inline requirement and physical iPhone verification
+Dan clarified that a gray provider button plus sheet was NOT the requested fix.
+The original colored logos and ALL available limits must stay visible above input.
+
+- Added client/native-composer.ts. It validates the current Fabric host ancestry,
+  expands only the owned native icon slot/button, hides its redundant host label,
+  and changes the shared track to normal nonshrinking layout with opaque background.
+- Native adapter relies on internal host handles. Unknown shapes remain unchanged;
+  cleanup restores styles; partial failure rolls back even if a node unmounts.
+- Native sheet content has its own maxHeight min(440, screen height * 0.6): the host
+  alone did not cap measured height and its title rose under the physical notch.
+- npm run typecheck PASS; npm test PASS 16. Reload running without restarting daemon.
+- PHYSICAL IPHONE PASS through iPhone Mirroring, 2026-09-11 ~17:12–17:14 Vancouver:
+  colored 5H/WK strip always visible above input, all available provider logos and
+  percentages. App background/re-entry and plugin reload retained it.
+- Actual final values observed: Claude 5H 78%, Claude WK 93%, Fable 91%, Codex 85%,
+  Grok 0%, Cursor 80%. Dynamic values are not fixed acceptance targets.
+- Transcript and input remain separate from the strip. Input focus tested without
+  typing; Mirroring suppresses the software keyboard, so expanded keyboard NOT_RUN.
+- Tap opened the bounded sheet; scroll reached Cursor; dismiss restored inline view.
+  Manual refresh/cooldown verified on physical iPhone earlier in this same run.
+- Android and native dark mode NOT_RUN. Prior statements that physical iOS was
+  unavailable are superseded by this actual physical-device verification.
+- Temporary native diagnostic text was removed; no credentials/log data exposed.

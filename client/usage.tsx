@@ -2,7 +2,8 @@ import { type PluginClientContext, type PluginSurfaceProps, type PluginButtonIco
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Image, Platform, Pressable, ScrollView, Text, View } from "react-native";
+import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { expandNativeComposer } from "./native-composer";
 import { expandWebComposer } from "./web-composer";
 import { registerUsagePills } from "./registry";
 import { providerLogos } from "./logos";
@@ -304,9 +305,15 @@ export function MainSurface(props: PluginSurfaceProps) {
   return <ScrollView style={{ flex: 1, backgroundColor: props.theme.colors.surface0 }}><UsageContent {...props} /></ScrollView>;
 }
 
-// Paseo supplies the native sheet scrolling and safe-area handling.
+// Bound native sheet content explicitly: the host can measure it at full height
+// before applying its own scroll limit, pushing the title under the iPhone notch.
 export function MobileUsageSheet(props: PluginButtonContentProps) {
-  return <UsageContent theme={props.theme} layout={{ ...props.layout, compact: true }} />;
+  const { height } = useWindowDimensions();
+  return (
+    <ScrollView style={{ maxHeight: Math.min(440, height * 0.6) }} nestedScrollEnabled>
+      <UsageContent theme={props.theme} layout={{ ...props.layout, compact: true }} />
+    </ScrollView>
+  );
 }
 
 export function UsagePill({ theme, layout }: PluginButtonIconProps) {
@@ -377,16 +384,21 @@ export function contributeClient(client: PluginClientContext) {
 
 // 0.8 removed custom composer bodies. On the web renderer, keep the original
 // two-row component inside our own icon mount and expand only its enclosing
-// button. Native clients open a scrollable sheet from the supported compact button.
+// button. Native uses a guarded host adapter to reserve the same two-row layout.
 function RichUsageIcon(props: PluginButtonIconProps) {
   const ref = useRef<View>(null);
+  const { width: windowWidth } = useWindowDimensions();
   const [expanded, setExpanded] = useState(false);
   useLayoutEffect(() => {
-    if (props.layout.platform !== "web") return;
+    if (props.layout.platform !== "web") {
+      const cleanup = expandNativeComposer(ref.current, Math.max(200, windowWidth - 32), props.theme.colors.surface0, StyleSheet.flatten);
+      setExpanded(cleanup !== null);
+      return cleanup ?? undefined;
+    }
     const cleanup = expandWebComposer(ref.current, props.theme.colors.surface0);
     setExpanded(cleanup !== null);
     return cleanup ?? undefined;
-  }, [props.layout.platform, props.theme.colors.surface0]);
+  }, [props.layout.platform, props.theme.colors.surface0, windowWidth]);
   return (
     <View ref={ref} style={{ minWidth: 0, flexShrink: 1 }}>
       {expanded ? <UsagePill {...props} /> : (
