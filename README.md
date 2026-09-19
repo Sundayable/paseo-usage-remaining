@@ -5,7 +5,7 @@ A [Paseo](https://paseo.sh) plugin that shows how much AI usage you have **left*
 The original two-line display is preserved on Paseo Desktop, web, and compatible native clients:
 
 - **5H** — provider logos, colored remaining percentages, and session reset times
-- **WK** — Claude, Fable, Codex, Grok, and Cursor (monthly) with their reset times
+- **WK** — Claude, Fable, Codex, Grok, Droid, and Cursor (monthly) with their reset times
 
 Green, yellow, and red percentages show remaining capacity. Refresh inline, or click
 for the full dashboard. On narrow web screens the reset labels and refresh button
@@ -25,8 +25,15 @@ and show an error.
 | Codex | Codex CLI login (`~/.codex/auth.json`) | Windows classified by reported length; plans that report only a weekly window (e.g. Pro) show no Codex 5H entry |
 | Grok | Grok CLI login (`~/.grok/auth.json`) | Supports unified-billing (weekly %) and legacy monthly credits. The billing body is protobuf-JSON: zero-valued fields are omitted, so a live period with no usage fields means 0% used (100% remaining) |
 | Cursor | Cursor desktop / `cursor-agent` login | Individual plans only — team-billed seats don't expose plan usage |
+| Droid (session + weekly) | `FACTORY_API_KEY` environment variable | Factory's Standard pool drives both chips. The monthly window and the Droid Core pool go in the dashboard detail. The `~/.factory/auth.v2.*` files are encrypted and are never read |
 
 Everything is read **locally and read-only**. No credentials are written, logged, or sent anywhere except each provider's own usage API.
+
+Droid is the one provider with no local credential file to read: it takes the key from
+`FACTORY_API_KEY` only. The Paseo daemon inherits its environment from the login shell, so
+the variable must be exported in `~/.zshrc` (or equivalent) and the daemon restarted before
+the plugin can see it. Without it, the Droid rows read `set FACTORY_API_KEY` in the dashboard
+and stay out of the strip.
 
 ## Install
 
@@ -51,7 +58,7 @@ paseo plugin update usage-remaining
 
 - Refreshes every 60s. Claude is polled at most every 5 min. Anthropic's usage endpoint answers `429` (retry-after about an hour) for tokens it will not serve: expired access tokens and long-lived `claude setup-token` tokens. A fresh token from an interactive Claude Code login answers normally. The plugin skips expired tokens without a request, prefers keychain/file tokens over the env setup token, and remembers a per-token cooldown across reloads.
 - If the Claude rows stay hidden, the keychain token has expired and nothing is refreshing it (Paseo-launched agents use the setup token). Run `claude` once without `CLAUDE_CODE_OAUTH_TOKEN` in the environment; Claude Code refreshes the keychain credential and the rows return within 5 min.
-- The wide inline display and dashboard include a manual refresh button. A manual refresh re-queries Codex, Grok, and Cursor immediately; Claude still keeps its 5-minute minimum interval and any active cooldown. After a manual refresh, the button shows a shared 2-minute countdown before it can be pressed again.
+- The wide inline display and dashboard include a manual refresh button. A manual refresh re-queries Codex, Grok, Cursor, and Droid immediately; Claude still keeps its 5-minute minimum interval and any active cooldown. After a manual refresh, the button shows a shared 2-minute countdown before it can be pressed again.
 - If a provider's token is mid-rotation (common while agents run), the plugin serves the **last good value** from a small local cache (`$PASEO_HOME/usage-remaining.cache.json`) instead of flickering to "—". Absolute reset timestamps are cached, so countdown labels keep updating even while the provider API is rate-limited.
 - Provider windows that never had data (not signed in) are omitted from the inline display and explained in the dashboard. If none are available, it says `Usage unavailable`.
 - A provider that answered recently but stops answering (for example right after its window resets, before the API reports the new period) stays in the strip as a dimmed `—` chip instead of silently disappearing. The dashboard card says `window reset · waiting for provider`.
@@ -118,6 +125,8 @@ paseo plugin reload usage-remaining
 
 Tests use Node.js 22.18+ native TypeScript stripping. They cover paginated agent
 bootstrap, live updates, moving/removing agents, teardown races, unavailable usage,
-and scoped web style restoration/fallback.
+scoped web style restoration/fallback, and the Grok and Factory billing parsers
+(including each one's post-reset window, where a provider that reports no usage
+must read as 100% remaining rather than dropping out of the strip).
 SDK dependencies are pinned to the installed stable Paseo 0.8.0 API; the live docs may
 show a newer subscription API that is not yet in that release.

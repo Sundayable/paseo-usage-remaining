@@ -504,6 +504,128 @@ async function fetchCursor(): Promise<RemainingRow> {
   return row("cursor_month", "cursor", "weekly", "Cursor", remainingFromUsed(usedPct), resetIso, detail);
 }
 
+
+// Droid (Factory). The CLI reads GET https://api.factory.ai/api/billing/limits
+// with `Authorization: Bearer <token>` and the same `X-Factory-Client` header it
+// puts on every backend call. The body is:
+//   { limits: { standard: { fiveHour|weekly|monthly: { usedPercent, windowEnd } },
+//               core: { …same three… } },
+//     extraUsageBalanceCents, overagePreference, extraUsageAllowed, canManageOverage }
+// "Standard" is the paid pool every model draws from first; "Core" is the
+// open-weight fallback pool. Only Standard drives the chip.
+export type FactoryLimitWindow = { usedPercent?: number | null; windowEnd?: string | null };
+export type FactoryLimitPool = {
+  fiveHour?: FactoryLimitWindow | null;
+  weekly?: FactoryLimitWindow | null;
+  monthly?: FactoryLimitWindow | null;
+};
+export type FactoryLimitsBody = {
+  limits?: { standard?: FactoryLimitPool | null; core?: FactoryLimitPool | null } | null;
+};
+
+type FactoryWindow = { usedPct: number | null; resetIso: string | null; live: boolean };
+
+// A window whose `windowEnd` has already passed is the next, untouched window:
+// the CLI shows it as 0% used with no countdown ("Use Droid to start"). Reading
+// that as "no data" would drop the chip for the first hours of every window —
+// the same failure the Grok parser was fixed for.
+function readFactoryWindow(window: FactoryLimitWindow | null | undefined, now: number): FactoryWindow | null {
+  if (window == null || typeof window !== "object") return null;
+  const endMs = window.windowEnd ? new Date(window.windowEnd).getTime() : Number.NaN;
+  if (!Number.isFinite(endMs) || endMs <= now) return { usedPct: 0, resetIso: null, live: false };
+  const used = window.usedPercent;
+  const usedPct = typeof used === "number" && Number.isFinite(used) ? used : null;
+  return { usedPct, resetIso: window.windowEnd ?? null, live: true };
+}
+
+function factoryAside(prefix: string, window: FactoryWindow | null): string | null {
+  if (!window || window.usedPct == null) return null;
+  return `${prefix} ${remainingFromUsed(window.usedPct)}% left`;
+}
+
+function factoryDetail(window: FactoryWindow, asides: Array<string | null>): string | null {
+  const parts = [
+    ...(window.live ? [] : ["no usage yet this window"]),
+    ...asides.filter((aside): aside is string => aside != null),
+  ];
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+export function parseFactoryLimits(
+  body: FactoryLimitsBody | null | undefined,
+  now: number = Date.now(),
+): RemainingRow[] {
+  const fallback = [
+    baseRow("factory_5h", "factory", "session", "Droid"),
+    baseRow("factory_week", "factory", "weekly", "Droid"),
+  ];
+  const standard = body?.limits?.standard;
+  if (standard == null || typeof standard !== "object") return fallback;
+
+  const fiveHour = readFactoryWindow(standard.fiveHour, now);
+  const weekly = readFactoryWindow(standard.weekly, now);
+  const monthly = readFactoryWindow(standard.monthly, now);
+  const core = body?.limits?.core;
+  const coreFiveHour = readFactoryWindow(core?.fiveHour, now);
+  const coreWeekly = readFactoryWindow(core?.weekly, now);
+
+  return [
+    fiveHour
+      ? row(
+          "factory_5h",
+          "factory",
+          "session",
+          "Droid",
+          remainingFromUsed(fiveHour.usedPct),
+          fiveHour.resetIso,
+          factoryDetail(fiveHour, [factoryAside("core", coreFiveHour)]),
+        )
+      : fallback[0],
+    weekly
+      ? row(
+          "factory_week",
+          "factory",
+          "weekly",
+          "Droid",
+          remainingFromUsed(weekly.usedPct),
+          weekly.resetIso,
+          factoryDetail(weekly, [factoryAside("monthly", monthly), factoryAside("core", coreWeekly)]),
+        )
+      : fallback[1],
+  ];
+}
+
+async function fetchFactory(): Promise<RemainingRow[]> {
+  const unavailable = (detail: string): RemainingRow[] => [
+    { ...baseRow("factory_5h", "factory", "session", "Droid"), detail },
+    { ...baseRow("factory_week", "factory", "weekly", "Droid"), detail },
+  ];
+  // The env var is the only credential source: the files under ~/.factory are
+  // encrypted and out of scope. `droid` itself supports this key ("Authenticate
+  // using a Factory API key set in the FACTORY_API_KEY environment variable").
+  const key = process.env.FACTORY_API_KEY?.trim();
+  if (!key) {
+    console.log("[usage-remaining] factory: no key (set FACTORY_API_KEY)");
+    return unavailable("set FACTORY_API_KEY");
+  }
+  const res = await fetchWithTimeout("https://api.factory.ai/api/billing/limits", {
+    headers: {
+      Authorization: `Bearer ${key}`,
+      Accept: "application/json",
+      "X-Factory-Client": "cli",
+    },
+  });
+  if (!res.ok) {
+    console.log(`[usage-remaining] factory: ${res.status} from billing limits endpoint`);
+    return unavailable(`Factory API ${res.status}`);
+  }
+  const parsed = parseFactoryLimits((await res.json()) as FactoryLimitsBody);
+  if (parsed.every((r) => r.status !== "available")) {
+    console.log("[usage-remaining] factory: 200 but no limits.standard in body (unrecognised shape)");
+  }
+  return parsed;
+}
+
 // Claude Code rotates its OAuth token while agents run; the old token 401s for a
 // moment and the rows would flicker out. Serve the last good value instead.
 const lastGood = new Map<string, { row: RemainingRow; at: number }>();
@@ -597,13 +719,14 @@ function pillText(rows: RemainingRow[]): string {
 
 export async function fetchUsage(input: { force?: boolean } = {}): Promise<UsageSnapshot> {
   await loadCache();
-  const [claude, codex, grok, cursor] = await Promise.allSettled([
+  const [claude, codex, grok, cursor, factory] = await Promise.allSettled([
     fetchClaude(),
     fetchCodex(),
     fetchGrok(),
     fetchCursor(),
+    fetchFactory(),
   ]);
-  for (const [name, result] of [["claude", claude], ["codex", codex], ["grok", grok], ["cursor", cursor]] as const) {
+  for (const [name, result] of [["claude", claude], ["codex", codex], ["grok", grok], ["cursor", cursor], ["factory", factory]] as const) {
     if (result.status === "rejected") {
       const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
       console.log(`[usage-remaining] ${name}: fetch failed (${reason})`);
@@ -621,6 +744,10 @@ export async function fetchUsage(input: { force?: boolean } = {}): Promise<Usage
   ]));
   rows.push(grok.status === "fulfilled" ? grok.value : baseRow("grok_week", "grok", "weekly", "Grok"));
   rows.push(cursor.status === "fulfilled" ? cursor.value : baseRow("cursor_month", "cursor", "weekly", "Cursor"));
+  rows.push(...(factory.status === "fulfilled" ? factory.value : [
+    baseRow("factory_5h", "factory", "session", "Droid"),
+    baseRow("factory_week", "factory", "weekly", "Droid"),
+  ]));
 
   const merged = withLastGood(rows);
   const session = merged.filter((r) => r.group === "session");

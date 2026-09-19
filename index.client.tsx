@@ -13,7 +13,7 @@ export default function contribute(client: PluginClientContext) {
     id: "open-usage",
     title: "Open remaining usage",
     icon: "Gauge",
-    keywords: ["quota", "usage", "claude", "fable", "codex", "grok", "cursor"],
+    keywords: ["quota", "usage", "claude", "fable", "codex", "grok", "cursor", "droid", "factory"],
     context: "global",
     onSelect({ openSurface }) {
       openSurface("main");
