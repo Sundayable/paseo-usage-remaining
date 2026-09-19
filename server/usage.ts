@@ -420,6 +420,23 @@ async function fetchGrok(): Promise<RemainingRow> {
 async function readCursorToken(): Promise<string | null> {
   if (process.env.CURSOR_ACCESS_TOKEN) return process.env.CURSOR_ACCESS_TOKEN;
   if (process.env.CURSOR_TOKEN) return process.env.CURSOR_TOKEN;
+  // Current Cursor (3.9.x) no longer writes cursorAuth/accessToken into
+  // state.vscdb on macOS, and `cursor-agent login` writes no auth.json there
+  // either -- both go to the Keychain instead. Linux has no Keychain, so the
+  // file below is still the live path there. Same mechanism as the Claude
+  // credential read above.
+  for (const args of [
+    ["find-generic-password", "-s", "cursor-access-token", "-a", "cursor-user", "-w"],
+    ["find-generic-password", "-s", "cursor-access-token", "-w"],
+  ]) {
+    try {
+      const { stdout } = await execFileAsync("security", args, { timeout: 2000 });
+      const token = stdout.trim();
+      if (token) return token;
+    } catch {
+      // not macOS, item absent, or access denied -- keep looking
+    }
+  }
   const dbPaths = [
     join(home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb"),
     join(home, ".config", "Cursor", "User", "globalStorage", "state.vscdb"),
