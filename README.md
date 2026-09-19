@@ -62,6 +62,11 @@ paseo plugin update usage-remaining
 - If a provider's token is mid-rotation (common while agents run), the plugin serves the **last good value** from a small local cache (`$PASEO_HOME/usage-remaining.cache.json`) instead of flickering to "—". Absolute reset timestamps are cached, so countdown labels keep updating even while the provider API is rate-limited.
 - Provider windows that never had data (not signed in) are omitted from the inline display and explained in the dashboard. If none are available, it says `Usage unavailable`.
 - A provider that answered recently but stops answering (for example right after its window resets, before the API reports the new period) stays in the strip as a dimmed `—` chip instead of silently disappearing. The dashboard card says `window reset · waiting for provider`.
+- Behind an HTTP proxy, set `NODE_USE_ENV_PROXY=1` in the daemon's environment. Node's
+  global `fetch()` ignores `http_proxy`/`https_proxy` without it, so every provider
+  request egresses directly. The symptom is selective: providers reachable directly keep
+  working while the blocked ones log `403` or `fetch failed`, which reads like an expired
+  credential rather than a network problem.
 - Every provider request has a 15-second deadline so one slow API cannot stall the whole strip, and each failure is logged as `[usage-remaining] <provider>: …` in the Paseo daemon log (`~/.paseo/daemon.log`) so a missing chip can be diagnosed from the log alone.
 - The original rich display uses the 0.8 web compatibility adapter described below. Native clients use a guarded native adapter to restore the same colored two-row display, with a scrollable sheet on tap.
 - Source changes require `npm run typecheck` followed by `paseo plugin reload usage-remaining`. The 0.8.0 desktop client updates without a daemon restart.

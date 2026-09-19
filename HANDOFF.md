@@ -86,6 +86,31 @@ Nothing under `~/.factory/` was read: `auth.v2.*` is encrypted and out of scope.
   and holds up at the 14px strip size on a Retina panel (28 physical px); on a 1x display
   it will be softer.
 
+## Follow-up found while verifying (not caused by this change)
+Every non-Factory provider showed `not signed in or no usage data` in the dashboard
+once the plugin went live. The daemon log said `claude: 403 from file token` /
+`403 from keychain token` and `codex: fetch failed`, which reads like expired
+credentials but is not.
+
+Node's global `fetch()` does not honour `http_proxy`/`https_proxy` unless
+`NODE_USE_ENV_PROXY=1` is set. Measured on this machine:
+
+| host | node default | node + NODE_USE_ENV_PROXY=1 |
+| --- | --- | --- |
+| api.anthropic.com | 403 | 404 (reachable) |
+| chatgpt.com | ETIMEDOUT | 403 (reachable) |
+| api.factory.ai | 200 | 200 |
+
+So requests egress directly and Anthropic/OpenAI block that path, while Factory does
+not — which is exactly why Droid was the only provider working. Fixed by exporting
+`NODE_USE_ENV_PROXY=1` in the daemon's environment; with it, every signed-in
+provider returns a live percentage again.
+
+A first guess that the daemon simply lacked the proxy vars was wrong: a proxy-stripped
+run from a normal shell reproduced the daemon's failures exactly, which ruled the
+daemon environment out and pointed at Node itself. `ps eww` cannot confirm another
+process's environment on current macOS, so that route proves nothing either way.
+
 ## Risks / notes
 - The endpoint is unofficial and undocumented; it was reverse-read from the CLI binary
   and then confirmed against one live 200 on one account (Standard + Core, overage on).
