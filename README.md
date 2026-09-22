@@ -21,7 +21,7 @@ and show an error.
 
 | Provider | Source | Notes |
 | --- | --- | --- |
-| Claude (session + weekly + Fable weekly) | Claude Code login (macOS Keychain / `~/.claude/.credentials.json` / `CLAUDE_CODE_OAUTH_TOKEN`) | Fable's model-scoped weekly limit is shown as its own entry |
+| Claude (session + weekly + every model-scoped weekly limit) | Claude Code login (macOS Keychain / `~/.claude/.credentials.json` / `CLAUDE_CODE_OAUTH_TOKEN`) | Fable's model-scoped weekly limit is shown as its own entry. Any other `weekly_scoped` limit Anthropic adds (e.g. an Opus 5.5 window) appears automatically as a Claude row labelled with the model name; legacy `seven_day_opus` / `seven_day_sonnet` windows are shown when `limits[]` lacks them |
 | Codex | Codex CLI login (`~/.codex/auth.json`) | Windows classified by reported length; plans that report only a weekly window (e.g. Pro) show no Codex 5H entry |
 | Grok | Grok CLI login (`~/.grok/auth.json`) | Supports unified-billing (weekly %) and legacy monthly credits. The billing body is protobuf-JSON: zero-valued fields are omitted, so a live period with no usage fields means 0% used (100% remaining) |
 | Cursor | Cursor desktop / `cursor-agent` login | Individual plans only — team-billed seats don't expose plan usage |

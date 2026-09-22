@@ -27,6 +27,15 @@ test('current provider label handles weekly-only plans, monthly plans and unavai
   assert.equal(usageLabel('codex'), 'Usage…');
   assert.equal(usageLabel('cursor', { rows: [{ ...snapshot.rows[0], brand: 'cursor', label: 'Cursor' }] }), 'Cursor · MO 92%');
 });
+test('a model-scoped Claude weekly row keeps its own name in the composer label', () => {
+  const rows = [
+    { brand: 'claude', label: 'Claude', group: 'session', remainingText: '84%', status: 'available' },
+    { brand: 'claude', label: 'Claude', group: 'weekly', remainingText: '58%', status: 'available' },
+    { brand: 'fable', label: 'Fable', group: 'weekly', remainingText: '30%', status: 'available' },
+    { brand: 'claude', label: 'Opus 5.5', group: 'weekly', remainingText: '75%', status: 'available' },
+  ];
+  assert.equal(usageLabel('claude/claude-opus-5-5', { rows }), 'Claude · 5H 84% · WK 58% · Opus 5.5 WK 75%');
+});
 test('all pages register; status updates preserve identity; moving/removing agents cleans up', async () => {
   const f = fixture(async ({ page }) => page.cursor ? { entries: [{ agent: agent('b') }], pageInfo: {} } : { entries: [{ agent: agent('a') }], pageInfo: { hasMore: true, nextCursor: 'next' } });
   const stop = registerUsagePills(f.client, async () => snapshot);

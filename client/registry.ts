@@ -9,7 +9,13 @@ export function usageLabel(provider: string, snapshot?: UsageSnapshot): string {
   const rows = snapshot?.rows.filter((row) => row.brand === brand && row.status === "available") ?? [];
   if (!snapshot) return "Usage…";
   if (!rows.length) return "Usage unavailable";
-  return `${rows[0].label} · ${rows.map((row) => `${row.brand === "cursor" ? "MO" : row.group === "session" ? "5H" : "WK"} ${row.remainingText}`).join(" · ")}`;
+  const head = rows[0].label;
+  return `${head} · ${rows.map((row) => {
+    const window = row.brand === "cursor" ? "MO" : row.group === "session" ? "5H" : "WK";
+    // A model-scoped row (e.g. "Opus 5.5") carries its own name so two WK values stay distinguishable.
+    const prefix = row.label !== head ? `${row.label} ` : "";
+    return `${prefix}${window} ${row.remainingText}`;
+  }).join(" · ")}`;
 }
 
 // Use the SDK shipped with Paseo 0.8.0, not the newer unreleased owned-list API.

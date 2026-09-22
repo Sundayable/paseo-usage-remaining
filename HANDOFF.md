@@ -1,43 +1,42 @@
-# Usage Remaining — 2026-09-13
+# Usage Remaining — 2026-09-22
 
 ## Current goal and result
-Grok chip vanished from the WK strip after the xAI weekly reset (2026-09-13
-18:57 UTC). Fixed at the parser, and the strip no longer drops a provider silently.
-
-## Root cause
-`cli-chat-proxy.grok.com/v1/billing?format=credits` serialises protobuf to JSON:
-fields at their default value are omitted. Right after a reset `creditUsagePercent`
-is 0 and therefore absent (also no `monthlyLimit`/`used`), while `currentPeriod`
-is present. `fetchGrok` treated that as "no usage data" → row `unavailable`.
-`withLastGood` then saw the cached row's `resetIso` in the past and also returned
-`unavailable`, and `UsagePill` filters to `available` only → chip gone for the
-first hours of every weekly period (until usage > 0.5%).
+Claude Opus 5.5 shipped 2026-09-21. The Claude parser hard-coded three rows
+(session, weekly, Fable) and would have silently ignored any new model-scoped
+weekly limit. It now renders every `weekly_scoped` entry from
+`api.anthropic.com/api/oauth/usage` as its own row, so a new Opus 5.5 (or later)
+window shows up without a plugin change.
 
 ## Implementation
-- `server/usage.ts`: `parseGrokBilling()` is a pure, exported parser. Order:
-  `creditUsagePercent` → `monthlyLimit`/`used` → live period with no usage fields
-  = 100% remaining (`detail: "no usage yet this period"`) → otherwise unavailable.
-- `withLastGood(rows, now, cache)`: when a provider had a recent good value but
-  its cached window has reset and the API is not answering, return status
-  `error` with `—` (kept brand/label) instead of `unavailable`. Testable via
-  injected `now`/`cache`. `resetLabel(iso, now)` for deterministic countdowns.
-- `fetchWithTimeout` (15 s AbortController) on all four provider requests;
-  rejected fetches and Grok non-200/unparsable bodies are logged as
-  `[usage-remaining] <provider>: …` (previously only Claude logged).
-- `client/usage.tsx` `UsagePill`: strip shows `status !== "unavailable"`, so
-  `error` rows render as dimmed muted `—` chips. Cards/labels unchanged.
-- `tests/grok-billing.test.mjs`: exact post-reset body, percent/limit paths,
-  and `withLastGood` placeholder + fresh-countdown behaviour.
+- `server/usage.ts`: `parseClaudeUsage(body)` is a pure, exported parser
+  (`ClaudeUsageBody` exported too). Rows: `claude_session`, `claude_week`, then
+  one row per `weekly_scoped` limit — Fable keeps `fable_week` / brand `fable`;
+  any other scope becomes `claude_scoped_<slug of model id>` with brand `claude`,
+  label = `scope.model.display_name` (fallback model id), detail
+  `model-scoped weekly limit`. Legacy `seven_day_opus` / `seven_day_sonnet`
+  windows are added only when `limits[]` did not already carry that family.
+  `seven_day_omelette` remains the Fable fallback when `limits[]` is absent.
+- `client/registry.ts` `usageLabel`: a row whose label differs from the head
+  row is prefixed with its name (`Claude · 5H 84% · WK 58% · Opus 5.5 WK 75%`).
+- `client/usage.tsx` `BrandMark`: Claude-brand rows whose label is not
+  `Claude` show their name next to the logo, so two Claude WK chips stay apart.
+- `tests/claude-usage.test.mjs`: the exact 2026-09-22 body (3 rows), an added
+  Opus 5.5 scope, missing display name + duplicate collapse, legacy
+  `seven_day_opus` precedence, and a body without `limits[]`.
 
 ## Verification
-- `npm run typecheck`: PASS. `npm test`: PASS, 24 tests.
-- `paseo plugin reload usage-remaining` → `running`; direct `fetchUsage()` returns
-  `grok_week available 100% 6d`; Paseo desktop strip shows Grok 100% 6d between
-  Codex and Cursor (screenshot taken 2026-09-13 14:28 PT).
+- `npm run typecheck`: PASS. `npm test`: PASS, 30 tests (Node 26.5).
+- `paseo plugin reload usage-remaining` on Paseo 0.8.0 daemon; log shows
+  `[usage-remaining] claude: ok via keychain token` after reload.
+- Live body on 2026-09-22 has `seven_day_opus: null` and only the Fable scope,
+  so the strip is unchanged today; the new row appears the day Anthropic adds one.
 
 ## Risks / notes
-- If xAI ever omits `currentPeriod` too, the row is unavailable (correct: no plan).
-- `error` chips only appear for providers that had data within the 6 h last-good
-  TTL; a genuinely signed-out provider still hides after that.
-- Next: none required. If a chip disappears again, read `~/.paseo/daemon.log`
-  for `[usage-remaining] <provider>:` lines first.
+- Paseo 0.9.0 (released 2026-09-22) is pending on Dan's Mac; the web/native
+  composer adapters were verified on 0.8.0 only. After the app update, open a
+  workspace and confirm the two-row strip still expands; if not, see the README
+  "Paseo 0.8 web compatibility" section and recheck `client/web-composer.ts`.
+- `RemainingRowSchema.brand` is unchanged (`claude` reused for scoped rows); no
+  client/daemon version skew.
+- Not pushed: commit is local on `main` of `Sundayable/paseo-usage-remaining`;
+  push needs Dan's approval.

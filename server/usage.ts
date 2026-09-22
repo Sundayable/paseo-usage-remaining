@@ -200,17 +200,6 @@ async function fetchClaude(): Promise<RemainingRow[]> {
     return rowsStillValid ? lastClaudeRows! : fallback;
   }
 
-  type ClaudeUsageBody = {
-    five_hour?: { utilization?: number; resets_at?: string | null };
-    seven_day?: { utilization?: number; resets_at?: string | null };
-    seven_day_omelette?: { utilization?: number; resets_at?: string | null };
-    limits?: Array<{
-      kind?: string;
-      percent?: number;
-      resets_at?: string | null;
-      scope?: { model?: { display_name?: string | null; id?: string | null } | null };
-    }>;
-  };
   let body: ClaudeUsageBody | null = null;
   for (const token of tokens) {
     const res = await fetchWithTimeout("https://api.anthropic.com/api/oauth/usage", {
@@ -243,22 +232,88 @@ async function fetchClaude(): Promise<RemainingRow[]> {
   }
   if (!body) return fallback;
 
-  const fableLimit = body.limits?.find((entry) => {
-    if (entry.kind !== "weekly_scoped") return false;
-    const name = `${entry.scope?.model?.display_name ?? ""} ${entry.scope?.model?.id ?? ""}`.toLowerCase();
-    return name.includes("fable") || name.includes("omelette");
-  });
-  const fableUsed = fableLimit?.percent ?? body.seven_day_omelette?.utilization;
-  const fableReset = fableLimit?.resets_at ?? body.seven_day_omelette?.resets_at ?? body.seven_day?.resets_at;
-
-  const rows = [
-    row("claude_session", "claude", "session", "Claude", remainingFromUsed(body.five_hour?.utilization), body.five_hour?.resets_at),
-    row("claude_week", "claude", "weekly", "Claude", remainingFromUsed(body.seven_day?.utilization), body.seven_day?.resets_at),
-    row("fable_week", "fable", "weekly", "Fable", remainingFromUsed(fableUsed), fableReset),
-  ];
+  const rows = parseClaudeUsage(body);
   lastClaudeRows = rows;
   lastClaudeAt = Date.now();
   saveCache();
+  return rows;
+}
+
+type ClaudeWindow = { utilization?: number | null; resets_at?: string | null } | null;
+export type ClaudeUsageBody = {
+  five_hour?: ClaudeWindow;
+  seven_day?: ClaudeWindow;
+  seven_day_omelette?: ClaudeWindow;
+  seven_day_opus?: ClaudeWindow;
+  seven_day_sonnet?: ClaudeWindow;
+  limits?: Array<{
+    kind?: string;
+    group?: string;
+    percent?: number | null;
+    resets_at?: string | null;
+    scope?: { model?: { display_name?: string | null; id?: string | null } | null; surface?: string | null } | null;
+  }> | null;
+};
+
+function scopeSlug(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "scoped";
+}
+
+// Anthropic adds a model-scoped weekly limit per flagship (Fable today; Opus 5.5
+// or later models may get one too). Every `weekly_scoped` entry becomes its own row
+// so a new limit is never silently hidden: Fable keeps its own brand, any other
+// scope is a Claude row labelled with the model name. Legacy `seven_day_*` windows
+// cover accounts whose body has no `limits` array.
+export function parseClaudeUsage(body: ClaudeUsageBody): RemainingRow[] {
+  const rows: RemainingRow[] = [
+    row("claude_session", "claude", "session", "Claude", remainingFromUsed(body.five_hour?.utilization), body.five_hour?.resets_at),
+    row("claude_week", "claude", "weekly", "Claude", remainingFromUsed(body.seven_day?.utilization), body.seven_day?.resets_at),
+  ];
+  const scoped = (body.limits ?? []).filter((entry) => entry?.kind === "weekly_scoped");
+  const isFable = (name: string) => name.includes("fable") || name.includes("omelette");
+  let fableSeen = false;
+  const seenIds = new Set<string>();
+  for (const entry of scoped) {
+    const model = entry.scope?.model;
+    const display = model?.display_name?.trim() || model?.id?.trim() || "";
+    const name = `${display} ${model?.id ?? ""}`.toLowerCase();
+    if (isFable(name)) {
+      if (fableSeen) continue;
+      fableSeen = true;
+      rows.push(row("fable_week", "fable", "weekly", "Fable", remainingFromUsed(entry.percent), entry.resets_at ?? body.seven_day?.resets_at));
+      continue;
+    }
+    const surface = entry.scope?.surface?.trim();
+    const label = display || (surface ? `Claude ${surface}` : "Claude scoped");
+    const id = `claude_scoped_${scopeSlug(model?.id || display || surface || "")}`;
+    if (seenIds.has(id)) continue;
+    seenIds.add(id);
+    rows.push(row(id, "claude", "weekly", label, remainingFromUsed(entry.percent), entry.resets_at ?? body.seven_day?.resets_at, "model-scoped weekly limit"));
+  }
+  if (!fableSeen) {
+    rows.push(
+      row(
+        "fable_week",
+        "fable",
+        "weekly",
+        "Fable",
+        remainingFromUsed(body.seven_day_omelette?.utilization),
+        body.seven_day_omelette?.resets_at ?? body.seven_day?.resets_at,
+      ),
+    );
+  }
+  // Legacy per-family windows: only when the `limits` array did not already carry them.
+  const legacy: Array<[keyof ClaudeUsageBody, string, string]> = [
+    ["seven_day_opus", "claude_scoped_opus", "Opus"],
+    ["seven_day_sonnet", "claude_scoped_sonnet", "Sonnet"],
+  ];
+  for (const [key, id, label] of legacy) {
+    const win = body[key] as ClaudeWindow | undefined;
+    if (!win || typeof win.utilization !== "number") continue;
+    const family = label.toLowerCase();
+    if (rows.some((r) => r.id.startsWith("claude_scoped_") && r.label.toLowerCase().includes(family))) continue;
+    rows.push(row(id, "claude", "weekly", label, remainingFromUsed(win.utilization), win.resets_at ?? body.seven_day?.resets_at, "model-scoped weekly limit"));
+  }
   return rows;
 }
 
