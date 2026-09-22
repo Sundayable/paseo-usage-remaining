@@ -56,6 +56,33 @@ test('all pages register; status updates preserve identity; moving/removing agen
   assert.ok(f.state.unsubscribed);
   assert.ok(f.created.every(row => row.removed));
 });
+test('only the first page opens the 0.9 agent subscription, and cleanup releases it', async () => {
+  const requests = [];
+  let released = 0;
+  const f = fixture(async (options) => {
+    requests.push(options);
+    return options.page.cursor
+      ? { entries: [{ agent: agent('b') }], pageInfo: {} }
+      : { entries: [{ agent: agent('a') }], pageInfo: { hasMore: true, nextCursor: 'next' }, subscription: { async release() { released++; } } };
+  });
+  const stop = registerUsagePills(f.client, async () => snapshot);
+  await tick();
+  assert.deepEqual(requests.map(r => 'subscribe' in r), [true, false]);
+  f.update({ kind: 'upsert', agent: agent('created-after-load') });
+  assert.equal(f.created.length, 3);
+  stop();
+  assert.equal(released, 1);
+});
+test('a subscription that arrives after cleanup is released, not leaked', async () => {
+  const bootstrap = deferred();
+  let released = 0;
+  const f = fixture(() => bootstrap.promise);
+  const stop = registerUsagePills(f.client, async () => snapshot);
+  stop();
+  bootstrap.resolve({ entries: [], pageInfo: {}, subscription: { async release() { released++; } } });
+  await tick();
+  assert.equal(released, 1);
+});
 test('late bootstrap and usage replies cannot recreate pills after cleanup', async () => {
   const bootstrap = deferred(), usage = deferred();
   const f = fixture(() => bootstrap.promise);

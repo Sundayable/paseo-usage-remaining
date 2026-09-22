@@ -18,7 +18,9 @@ export function usageLabel(provider: string, snapshot?: UsageSnapshot): string {
   }).join(" · ")}`;
 }
 
-// Use the SDK shipped with Paseo 0.8.0, not the newer unreleased owned-list API.
+// Paseo 0.9 delivers agent_update to agents.subscribe() only while an agents.list
+// subscription is open, so the first page asks for one and owns its lifetime.
+// On 0.8 `subscribe` is a plain request field and no handle comes back.
 export function registerUsagePills(client: PluginClientContext, fetchUsage: () => Promise<UsageSnapshot>, icon: PluginButtonIcon = "Gauge", mobileContent?: ComponentType<PluginButtonContentProps>) {
   const pills = new Map<string, { agent: Agent; registration: PluginButtonRegistration }>();
   const changedDuringBootstrap = new Set<string>();
@@ -26,6 +28,11 @@ export function registerUsagePills(client: PluginClientContext, fetchUsage: () =
   let bootstrapping = true;
   let fetching = false;
   let snapshot: UsageSnapshot | undefined;
+  let agentFeed: { release(): Promise<void> } | undefined;
+  function releaseFeed() {
+    agentFeed?.release().catch(() => { /* The host already dropped the subscription. */ });
+    agentFeed = undefined;
+  }
 
   function remove(id: string) {
     pills.get(id)?.registration.remove();
@@ -64,8 +71,10 @@ export function registerUsagePills(client: PluginClientContext, fetchUsage: () =
   void (async () => {
     let cursor: string | undefined;
     do {
-      const result = await client.paseo.agents.list({ page: { limit: 100, cursor } });
-      if (stopped) return;
+      const result: { entries: { agent: Agent }[]; pageInfo?: { hasMore?: boolean; nextCursor?: string | null }; subscription?: { release(): Promise<void> } } =
+        cursor ? await client.paseo.agents.list({ page: { limit: 100, cursor } }) : await client.paseo.agents.list({ page: { limit: 100 }, subscribe: {} });
+      if (result.subscription) agentFeed = result.subscription;
+      if (stopped) { releaseFeed(); return; }
       for (const { agent } of result.entries) {
         if (!changedDuringBootstrap.has(agent.id)) upsert(agent);
       }
@@ -97,6 +106,7 @@ export function registerUsagePills(client: PluginClientContext, fetchUsage: () =
     stopped = true;
     clearInterval(timer);
     unsubscribe();
+    releaseFeed();
     for (const { registration } of pills.values()) registration.remove();
     pills.clear();
   };

@@ -40,3 +40,23 @@ window shows up without a plugin change.
   client/daemon version skew.
 - Not pushed: commit is local on `main` of `Sundayable/paseo-usage-remaining`;
   push needs Dan's approval.
+
+## 2026-09-22 (later): Paseo 0.9.0 composer pills
+- Symptom after the 0.9.0 app update (17:31 UTC): no usage chip on agents created
+  after the app started. Server side was healthy (`claude: ok via keychain token`).
+- Cause: in 0.9.0 `client.paseo.agents.subscribe()` only receives `agent_update`
+  while an `agents.list({ subscribe: {} })` observation is open. The plugin listed
+  agents once without `subscribe`, so new agents never got a pill.
+- Fix (`client/registry.ts`): the first page requests `subscribe: {}` and keeps the
+  returned `subscription`; cleanup (and a late reply after cleanup) releases it.
+  On 0.8 `subscribe` is a plain request field and no handle is returned.
+- Tests: two new cases in `tests/registry.test.mjs`; both fail on the previous
+  registry and pass now. `npm run typecheck` PASS, `npm test` 32/32 PASS.
+  `paseo plugin reload usage-remaining` done 17:52 UTC.
+- Still to confirm by eye: chip visible on a newly created agent in the desktop app.
+- Unrelated Paseo 0.9.0 bug seen at the same time: the composer shows "Opus 5" for
+  `claude-opus-5-5` agents. `normalizeClaudeRuntimeModelId` (server
+  `providers/claude/model-manifest.js`) falls through to an unanchored
+  `claude-(opus)-(\d+)` match, so an ID missing from the built-in manifest
+  collapses to `claude-opus-5` in `runtimeInfo.model`. Display only: queries use
+  `config.model` (still `claude-opus-5-5`). Fix belongs upstream in Paseo.
