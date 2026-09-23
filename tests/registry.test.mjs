@@ -24,6 +24,9 @@ function fixture(list) {
 test('current provider label handles weekly-only plans, monthly plans and unavailable usage', () => {
   assert.equal(usageLabel('codex/gpt-6-astra', snapshot), 'Codex · WK 92%');
   assert.equal(usageLabel('claude', snapshot), 'Usage unavailable');
+  const signedOut = { rows: [{ brand: 'claude', label: 'Claude', group: 'session', remainingText: 'login expired', status: 'error' }, { brand: 'claude', label: 'Claude', group: 'weekly', remainingText: '—', status: 'error' }] };
+  assert.equal(usageLabel('claude/claude-opus-5-5', signedOut), 'Claude · login expired');
+  assert.equal(usageLabel('claude', { rows: [{ ...signedOut.rows[1] }] }), 'Usage unavailable');
   assert.equal(usageLabel('codex'), 'Usage…');
   assert.equal(usageLabel('cursor', { rows: [{ ...snapshot.rows[0], brand: 'cursor', label: 'Cursor' }] }), 'Cursor · MO 92%');
 });

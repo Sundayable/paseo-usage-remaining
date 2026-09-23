@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseClaudeUsage } from "../server/usage.ts";
+import { claudeLoginExpired, claudeSignedOutRows, parseClaudeUsage, withLastGood } from "../server/usage.ts";
 
 const resets5h = "2026-09-22T19:10:00.857534+00:00";
 const resetsWk = "2026-09-24T02:00:00.857553+00:00";
@@ -89,4 +89,32 @@ test("a body without limits[] or scoped windows still yields the three rows with
   assert.equal(rows.claude_session.remainingText, "100%");
   assert.equal(rows.fable_week.status, "unavailable");
   assert.equal(rows.fable_week.remainingText, "—");
+});
+
+// 2026-09-23: the refresh token expired, Claude Code blanked the keychain tokens, and
+// only the env setup token was left. The chips vanished instead of saying why.
+const now = Date.parse("2026-09-23T16:30:00Z");
+const envToken = { token: "env", expiresAt: null, source: "env" };
+
+test("a blank keychain login with only the env setup token left counts as expired", () => {
+  assert.equal(claudeLoginExpired([envToken], true, now), true);
+  assert.equal(claudeLoginExpired([], true, now), true);
+  assert.equal(claudeLoginExpired([{ token: "old", expiresAt: now - 60_000, source: "keychain" }, envToken], true, now), true);
+});
+
+test("a live keychain token, or a machine that never signed in, is not an expired login", () => {
+  assert.equal(claudeLoginExpired([{ token: "live", expiresAt: now + 3_600_000, source: "keychain" }, envToken], true, now), false);
+  assert.equal(claudeLoginExpired([{ token: "file", expiresAt: null, source: "file" }], true, now), false);
+  assert.equal(claudeLoginExpired([envToken], false, now), false);
+});
+
+test("signed-out rows stay visible as a named error, not hidden", () => {
+  const rows = byId(withLastGood(claudeSignedOutRows(), now, new Map()));
+  assert.deepEqual(Object.keys(rows), ["claude_session", "claude_week", "fable_week"]);
+  for (const row of Object.values(rows)) {
+    assert.equal(row.status, "error");
+    assert.match(row.detail, /claude auth login/);
+  }
+  assert.equal(rows.claude_session.remainingText, "login expired");
+  assert.equal(rows.claude_week.remainingText, "—");
 });

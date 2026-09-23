@@ -8,7 +8,11 @@ export function usageLabel(provider: string, snapshot?: UsageSnapshot): string {
   const brand = provider.split("/")[0];
   const rows = snapshot?.rows.filter((row) => row.brand === brand && row.status === "available") ?? [];
   if (!snapshot) return "Usage…";
-  if (!rows.length) return "Usage unavailable";
+  if (!rows.length) {
+    // A state the user has to fix (e.g. Claude Code signed out) is named, not hidden.
+    const notice = snapshot.rows.find((row) => row.brand === brand && row.status === "error" && row.remainingText !== "—");
+    return notice ? `${notice.label} · ${notice.remainingText}` : "Usage unavailable";
+  }
   const head = rows[0].label;
   return `${head} · ${rows.map((row) => {
     const window = row.brand === "cursor" ? "MO" : row.group === "session" ? "5H" : "WK";

@@ -117,12 +117,15 @@ let lastClaudeRows: RemainingRow[] | null = null;
 let lastClaudeAt = 0;
 const CLAUDE_MIN_INTERVAL_MS = 5 * 60_000;
 const CLAUDE_DEFAULT_COOLDOWN_MS = 60 * 60_000;
+// 403 means the token can never read usage (a `claude setup-token` token lacks the
+// user:profile scope). Retrying it every poll is what earned the hourly 429s.
+const CLAUDE_FORBIDDEN_COOLDOWN_MS = 6 * 60 * 60_000;
 
 function tokenKey(token: string): string {
   return createHash("sha256").update(token).digest("hex").slice(0, 16);
 }
 
-type ClaudeCredential = { token: string; expiresAt: number | null; source: "keychain" | "file" | "env" };
+export type ClaudeCredential = { token: string; expiresAt: number | null; source: "keychain" | "file" | "env" };
 
 async function readClaudeEnvToken(): Promise<string | undefined> {
   if (process.env.CLAUDE_CODE_OAUTH_TOKEN) return process.env.CLAUDE_CODE_OAUTH_TOKEN;
@@ -148,9 +151,16 @@ function parseClaudeCredential(raw: unknown, source: ClaudeCredential["source"])
   return { token: oauth.accessToken, expiresAt: typeof oauth.expiresAt === "number" ? oauth.expiresAt : null, source };
 }
 
-async function readClaudeCredentials(): Promise<ClaudeCredential[]> {
+// A `claudeAiOauth` block, even one with blank tokens, means Claude Code was signed
+// in on this machine; a machine that only ever had the env setup token has none.
+function hasClaudeLogin(raw: unknown): boolean {
+  return Boolean((raw as { claudeAiOauth?: unknown } | null)?.claudeAiOauth);
+}
+
+async function readClaudeCredentials(): Promise<{ creds: ClaudeCredential[]; loginRecord: boolean }> {
   const found: ClaudeCredential[] = [];
   const seen = new Set<string>();
+  let loginRecord = false;
   const add = (cred: ClaudeCredential | null) => {
     if (cred && !seen.has(cred.token)) {
       seen.add(cred.token);
@@ -166,36 +176,83 @@ async function readClaudeCredentials(): Promise<ClaudeCredential[]> {
   ]) {
     try {
       const { stdout } = await execFileAsync("security", args, { timeout: 2000 });
-      add(parseClaudeCredential(JSON.parse(stdout.trim()), "keychain"));
+      const raw = JSON.parse(stdout.trim());
+      loginRecord ||= hasClaudeLogin(raw);
+      add(parseClaudeCredential(raw, "keychain"));
     } catch {
       // keep looking
     }
   }
-  add(parseClaudeCredential(await readJson(join(process.env.CLAUDE_HOME || join(home, ".claude"), ".credentials.json")), "file"));
+  const file = await readJson(join(process.env.CLAUDE_HOME || join(home, ".claude"), ".credentials.json"));
+  loginRecord ||= hasClaudeLogin(file);
+  add(parseClaudeCredential(file, "file"));
   // Paseo agents authenticate through this long-lived token; keep it as the last resort.
   const envToken = await readClaudeEnvToken();
   if (envToken) add({ token: envToken, expiresAt: null, source: "env" });
-  return found;
+  return { creds: found, loginRecord };
 }
 
-async function fetchClaude(): Promise<RemainingRow[]> {
-  const now = Date.now();
-  const fallback = [
+// Once the refresh token expires (about a month after `claude auth login`), Claude
+// Code blanks both tokens in the keychain. Only the env setup token is left, and
+// oauth/usage never serves it, so without this the Claude chips just vanish.
+export function claudeLoginExpired(creds: ClaudeCredential[], loginRecord: boolean, now: number = Date.now()): boolean {
+  if (!loginRecord) return false;
+  return !creds.some((cred) => cred.source !== "env" && (cred.expiresAt == null || cred.expiresAt > now + 30_000));
+}
+
+export function claudeSignedOutRows(): RemainingRow[] {
+  const detail = "Claude Code login expired · run `claude auth login`";
+  return claudeFallbackRows().map((r) => ({
+    ...r,
+    remainingText: r.id === "claude_session" ? "login expired" : "—",
+    detail,
+    status: "error" as const,
+  }));
+}
+
+function claudeFallbackRows(): RemainingRow[] {
+  return [
     baseRow("claude_session", "claude", "session", "Claude"),
     baseRow("claude_week", "claude", "weekly", "Claude"),
     baseRow("fable_week", "fable", "weekly", "Fable"),
   ];
+}
+
+// The numbers cached before the login expired belong to a session that no longer
+// exists; serving them for another six hours would hide the real problem.
+function forgetClaudeRows(): void {
+  lastClaudeRows = null;
+  let removed = false;
+  for (const [id, entry] of lastGood) {
+    if (entry.row.brand === "claude" || entry.row.brand === "fable") {
+      lastGood.delete(id);
+      removed = true;
+    }
+  }
+  if (removed) saveCache();
+}
+
+async function fetchClaude(): Promise<RemainingRow[]> {
+  const now = Date.now();
+  const fallback = claudeFallbackRows();
   const rowsStillValid = lastClaudeRows != null && !lastClaudeRows.some((r) => cachedWindowHasReset(r, now));
   // The minimum interval applies to manual refreshes too: the endpoint blocks the
   // whole account for an hour when it is polled too often.
   if (rowsStillValid && now - lastClaudeAt < CLAUDE_MIN_INTERVAL_MS) return lastClaudeRows!;
 
-  const creds = await readClaudeCredentials();
+  const { creds, loginRecord } = await readClaudeCredentials();
+  const loginExpired = claudeLoginExpired(creds, loginRecord, now);
+  const signedOut = () => {
+    forgetClaudeRows();
+    console.log("[usage-remaining] claude: Claude Code login expired (keychain token blank or expired); run `claude auth login`");
+    return claudeSignedOutRows();
+  };
   const tokens = creds
     .filter((cred) => cred.expiresAt == null || cred.expiresAt > now + 30_000)
     .map((cred) => cred.token)
     .filter((token) => (claudeTokenCooldownUntil.get(tokenKey(token)) ?? 0) <= now);
   if (tokens.length === 0) {
+    if (loginExpired) return signedOut();
     console.log(`[usage-remaining] claude: no usable token (${creds.length} found, all expired or cooling down)`);
     return rowsStillValid ? lastClaudeRows! : fallback;
   }
@@ -210,8 +267,14 @@ async function fetchClaude(): Promise<RemainingRow[]> {
       },
     });
     const source = creds.find((c) => c.token === token)?.source ?? "?";
-    if (res.status === 401 || res.status === 403) {
-      console.log(`[usage-remaining] claude: ${res.status} from ${source} token`);
+    if (res.status === 403) {
+      claudeTokenCooldownUntil.set(tokenKey(token), now + CLAUDE_FORBIDDEN_COOLDOWN_MS);
+      saveCache();
+      console.log(`[usage-remaining] claude: 403 from ${source} token, not retrying for ${CLAUDE_FORBIDDEN_COOLDOWN_MS / 3_600_000}h`);
+      continue;
+    }
+    if (res.status === 401) {
+      console.log(`[usage-remaining] claude: 401 from ${source} token`);
       continue;
     }
     if (res.status === 429) {
@@ -230,7 +293,7 @@ async function fetchClaude(): Promise<RemainingRow[]> {
     body = (await res.json()) as ClaudeUsageBody;
     break;
   }
-  if (!body) return fallback;
+  if (!body) return loginExpired ? signedOut() : fallback;
 
   const rows = parseClaudeUsage(body);
   lastClaudeRows = rows;
@@ -665,11 +728,7 @@ export async function fetchUsage(input: { force?: boolean } = {}): Promise<Usage
     }
   }
   const rows: RemainingRow[] = [];
-  rows.push(...(claude.status === "fulfilled" ? claude.value : [
-    baseRow("claude_session", "claude", "session", "Claude"),
-    baseRow("claude_week", "claude", "weekly", "Claude"),
-    baseRow("fable_week", "fable", "weekly", "Fable"),
-  ]));
+  rows.push(...(claude.status === "fulfilled" ? claude.value : claudeFallbackRows()));
   rows.push(...(codex.status === "fulfilled" ? codex.value : [
     baseRow("codex_session", "codex", "session", "Codex"),
     baseRow("codex_week", "codex", "weekly", "Codex"),

@@ -60,3 +60,22 @@ window shows up without a plugin change.
   `claude-(opus)-(\d+)` match, so an ID missing from the built-in manifest
   collapses to `claude-opus-5` in `runtimeInfo.model`. Display only: queries use
   `config.model` (still `claude-opus-5-5`). Fix belongs upstream in Paseo.
+
+## 2026-09-23: Claude chip vanished (Claude Code login expired)
+- Symptom: no Claude/Fable chips since 2026-09-22 15:15 PT; agent pills said "Usage unavailable".
+- Cause: not the plugin. The interactive Claude Code login's `refreshTokenExpiresAt`
+  passed (2026-09-22 14:36 PT) and Claude Code blanked `accessToken`/`refreshToken` in
+  keychain `Claude Code-credentials` and `~/.claude/.credentials.json`. Only the env
+  setup token (`~/.config/agent-core/auth/claude.env`) was left, and `oauth/usage`
+  answers it 403. The plugin retried the 403 every poll and drew an hourly 429. After
+  the 6 h last-good TTL the rows went `unavailable`, and the client hides those.
+- Fix (`server/usage.ts`): a 403 puts the token on a 6 h persisted cooldown.
+  `claudeLoginExpired()` detects a keychain/file `claudeAiOauth` block with no live
+  token. In that state the plugin drops cached Claude/Fable rows and returns
+  `claudeSignedOutRows()`: status `error`, session chip "login expired", detail
+  "run `claude auth login`". `client/registry.ts` `usageLabel` names that state on
+  agent pills ("Claude · login expired"). A machine that never signed in is unchanged.
+- Tests: 3 new cases in `tests/claude-usage.test.mjs`, 1 in `tests/registry.test.mjs`.
+  `npm run typecheck` PASS, `npm test` 35/35 PASS. Reloaded 21:25 UTC; log shows
+  `claude: Claude Code login expired ...`.
+- Recovery is `claude auth login` (the browser flow) on Dan's Mac; expect it about monthly.
