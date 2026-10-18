@@ -151,7 +151,9 @@ function RefreshButton({
 function BrandMark({ row, theme, size, showLabel = false }: { row: RemainingRow; theme: Theme; size: number; showLabel?: boolean }) {
   const logoKey = row.brand === "fable" ? "claude" : row.brand;
   const uri = providerLogos[logoKey];
-  const showName = showLabel || row.brand === "fable" || !uri;
+  // Model-scoped Claude rows (e.g. "Opus 5.5") share the Claude logo, so the chip
+  // must carry the model name or it is indistinguishable from the all-models row.
+  const showName = showLabel || row.brand === "fable" || !uri || (row.brand === "claude" && row.label !== "Claude");
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
       {uri ? <Image source={{ uri }} style={{ width: size, height: size, borderRadius: size * 0.22 }} /> : null}

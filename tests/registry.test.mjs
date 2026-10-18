@@ -24,8 +24,20 @@ function fixture(list) {
 test('current provider label handles weekly-only plans, monthly plans and unavailable usage', () => {
   assert.equal(usageLabel('codex/gpt-6-astra', snapshot), 'Codex · WK 92%');
   assert.equal(usageLabel('claude', snapshot), 'Usage unavailable');
+  const signedOut = { rows: [{ brand: 'claude', label: 'Claude', group: 'session', remainingText: 'login expired', status: 'error' }, { brand: 'claude', label: 'Claude', group: 'weekly', remainingText: '—', status: 'error' }] };
+  assert.equal(usageLabel('claude/claude-opus-5-5', signedOut), 'Claude · login expired');
+  assert.equal(usageLabel('claude', { rows: [{ ...signedOut.rows[1] }] }), 'Usage unavailable');
   assert.equal(usageLabel('codex'), 'Usage…');
   assert.equal(usageLabel('cursor', { rows: [{ ...snapshot.rows[0], brand: 'cursor', label: 'Cursor' }] }), 'Cursor · MO 92%');
+});
+test('a model-scoped Claude weekly row keeps its own name in the composer label', () => {
+  const rows = [
+    { brand: 'claude', label: 'Claude', group: 'session', remainingText: '84%', status: 'available' },
+    { brand: 'claude', label: 'Claude', group: 'weekly', remainingText: '58%', status: 'available' },
+    { brand: 'fable', label: 'Fable', group: 'weekly', remainingText: '30%', status: 'available' },
+    { brand: 'claude', label: 'Opus 5.5', group: 'weekly', remainingText: '75%', status: 'available' },
+  ];
+  assert.equal(usageLabel('claude/claude-opus-5-5', { rows }), 'Claude · 5H 84% · WK 58% · Opus 5.5 WK 75%');
 });
 test('all pages register; status updates preserve identity; moving/removing agents cleans up', async () => {
   const f = fixture(async ({ page }) => page.cursor ? { entries: [{ agent: agent('b') }], pageInfo: {} } : { entries: [{ agent: agent('a') }], pageInfo: { hasMore: true, nextCursor: 'next' } });
@@ -46,6 +58,33 @@ test('all pages register; status updates preserve identity; moving/removing agen
   } finally { stop(); }
   assert.ok(f.state.unsubscribed);
   assert.ok(f.created.every(row => row.removed));
+});
+test('only the first page opens the 0.9 agent subscription, and cleanup releases it', async () => {
+  const requests = [];
+  let released = 0;
+  const f = fixture(async (options) => {
+    requests.push(options);
+    return options.page.cursor
+      ? { entries: [{ agent: agent('b') }], pageInfo: {} }
+      : { entries: [{ agent: agent('a') }], pageInfo: { hasMore: true, nextCursor: 'next' }, subscription: { async release() { released++; } } };
+  });
+  const stop = registerUsagePills(f.client, async () => snapshot);
+  await tick();
+  assert.deepEqual(requests.map(r => 'subscribe' in r), [true, false]);
+  f.update({ kind: 'upsert', agent: agent('created-after-load') });
+  assert.equal(f.created.length, 3);
+  stop();
+  assert.equal(released, 1);
+});
+test('a subscription that arrives after cleanup is released, not leaked', async () => {
+  const bootstrap = deferred();
+  let released = 0;
+  const f = fixture(() => bootstrap.promise);
+  const stop = registerUsagePills(f.client, async () => snapshot);
+  stop();
+  bootstrap.resolve({ entries: [], pageInfo: {}, subscription: { async release() { released++; } } });
+  await tick();
+  assert.equal(released, 1);
 });
 test('late bootstrap and usage replies cannot recreate pills after cleanup', async () => {
   const bootstrap = deferred(), usage = deferred();
