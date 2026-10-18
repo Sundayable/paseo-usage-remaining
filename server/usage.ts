@@ -1,11 +1,12 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, rename } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { RemainingRow, UsageSnapshot } from "../shared/usage";
+import { createClaudePoller, credentialKey, emptyClaudeState, restoreClaudeState, type ClaudeCredential } from "./claude-poll.ts";
+export type { ClaudeCredential } from "./claude-poll.ts";
 
 const execFileAsync = promisify(execFile);
 const home = homedir();
@@ -107,48 +108,38 @@ async function readJson(path: string): Promise<unknown | null> {
   }
 }
 
-// Anthropic's usage endpoint answers 429 (retry-after ~1 h) for tokens it will not
-// serve: expired access tokens and long-lived setup tokens. A fresh keychain token
-// from an interactive Claude Code login answers 200. So: never call with an expired
-// token, prefer keychain/file tokens over the env setup token, and keep a per-token
-// cooldown (persisted across reloads) so a rejected token is not retried for an hour.
-const claudeTokenCooldownUntil = new Map<string, number>();
-let lastClaudeRows: RemainingRow[] | null = null;
-let lastClaudeAt = 0;
-const CLAUDE_MIN_INTERVAL_MS = 5 * 60_000;
-const CLAUDE_DEFAULT_COOLDOWN_MS = 60 * 60_000;
-// 403 means the token can never read usage (a `claude setup-token` token lacks the
-// user:profile scope). Retrying it every poll is what earned the hourly 429s.
-const CLAUDE_FORBIDDEN_COOLDOWN_MS = 6 * 60 * 60_000;
-
-function tokenKey(token: string): string {
-  return createHash("sha256").update(token).digest("hex").slice(0, 16);
-}
-
-export type ClaudeCredential = { token: string; expiresAt: number | null; source: "keychain" | "file" | "env" };
-
-async function readClaudeEnvToken(): Promise<string | undefined> {
-  if (process.env.CLAUDE_CODE_OAUTH_TOKEN) return process.env.CLAUDE_CODE_OAUTH_TOKEN;
-  // Optional env files some setups use to hand Claude a long-lived token.
+// claude-paseo sources this file at process launch. It must take precedence over
+// the daemon's inherited environment and the unrelated interactive Claude login.
+export async function readClaudeEnvToken(
+  root: string = home,
+  inheritedToken: string | undefined = process.env.CLAUDE_CODE_OAUTH_TOKEN,
+): Promise<{ token: string; description: string } | undefined> {
   for (const path of [
-    join(home, ".config", "agent-core", "auth", "claude.env"),
-    join(home, ".claude", "claude.env"),
+    join(root, ".config", "agent-core", "auth", "claude.env"),
+    join(root, ".claude", "claude.env"),
   ]) {
     try {
       const env = await readFile(path, "utf8");
-      const token = env.match(/CLAUDE_CODE_OAUTH_TOKEN=["']?([^"'\n]+)/)?.[1];
-      if (token) return token;
+      // Parse only a literal assignment. Never source/execute a credential file.
+      const token = env.match(/^(?:export\s+)?CLAUDE_CODE_OAUTH_TOKEN\s*=\s*(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^\s#"']+))\s*(?:#.*)?$/m);
+      const value = token?.[1] ?? token?.[2] ?? token?.[3];
+      if (value) {
+        const labels = await readJson(join(root, ".paseo", "usage-remaining.accounts.json")) as Record<string, unknown> | null;
+        const label = labels?.[credentialKey(value)];
+        const account = typeof label === "string" ? label.replace(/[\r\n\x00-\x1f]/g, " ").slice(0, 100) : null;
+        return { token: value, description: [path.replace(root, "~"), account].filter(Boolean).join(" · ") };
+      }
     } catch {
       // keep looking
     }
   }
-  return undefined;
+  return inheritedToken ? { token: inheritedToken, description: "CLAUDE_CODE_OAUTH_TOKEN" } : undefined;
 }
 
 function parseClaudeCredential(raw: unknown, source: ClaudeCredential["source"]): ClaudeCredential | null {
-  const oauth = (raw as { claudeAiOauth?: { accessToken?: string; expiresAt?: number } } | null)?.claudeAiOauth;
+  const oauth = (raw as { claudeAiOauth?: { accessToken?: string; expiresAt?: number; subscriptionType?: string } } | null)?.claudeAiOauth;
   if (!oauth?.accessToken) return null;
-  return { token: oauth.accessToken, expiresAt: typeof oauth.expiresAt === "number" ? oauth.expiresAt : null, source };
+  return { token: oauth.accessToken, expiresAt: typeof oauth.expiresAt === "number" ? oauth.expiresAt : null, source, description: oauth.subscriptionType ? `Claude ${oauth.subscriptionType}` : undefined };
 }
 
 // A `claudeAiOauth` block, even one with blank tokens, means Claude Code was signed
@@ -167,6 +158,8 @@ async function readClaudeCredentials(): Promise<{ creds: ClaudeCredential[]; log
       found.push(cred);
     }
   };
+  const worker = await readClaudeEnvToken();
+  if (worker) add({ ...worker, expiresAt: null, source: "env" });
   const account = /^[a-zA-Z0-9._-]+$/.test(process.env.USER || userInfo().username)
     ? process.env.USER || userInfo().username
     : "claude-code-user";
@@ -183,12 +176,9 @@ async function readClaudeCredentials(): Promise<{ creds: ClaudeCredential[]; log
       // keep looking
     }
   }
-  const file = await readJson(join(process.env.CLAUDE_HOME || join(home, ".claude"), ".credentials.json"));
+  const file = await readJson(join(process.env.CLAUDE_CONFIG_DIR || process.env.CLAUDE_HOME || join(home, ".claude"), ".credentials.json"));
   loginRecord ||= hasClaudeLogin(file);
   add(parseClaudeCredential(file, "file"));
-  // Paseo agents authenticate through this long-lived token; keep it as the last resort.
-  const envToken = await readClaudeEnvToken();
-  if (envToken) add({ token: envToken, expiresAt: null, source: "env" });
   return { creds: found, loginRecord };
 }
 
@@ -218,89 +208,23 @@ function claudeFallbackRows(): RemainingRow[] {
   ];
 }
 
-// The numbers cached before the login expired belong to a session that no longer
-// exists; serving them for another six hours would hide the real problem.
-function forgetClaudeRows(): void {
-  lastClaudeRows = null;
-  let removed = false;
-  for (const [id, entry] of lastGood) {
-    if (entry.row.brand === "claude" || entry.row.brand === "fable") {
-      lastGood.delete(id);
-      removed = true;
-    }
-  }
-  if (removed) saveCache();
-}
-
-async function fetchClaude(): Promise<RemainingRow[]> {
-  const now = Date.now();
-  const fallback = claudeFallbackRows();
-  const rowsStillValid = lastClaudeRows != null && !lastClaudeRows.some((r) => cachedWindowHasReset(r, now));
-  // The minimum interval applies to manual refreshes too: the endpoint blocks the
-  // whole account for an hour when it is polled too often.
-  if (rowsStillValid && now - lastClaudeAt < CLAUDE_MIN_INTERVAL_MS) return lastClaudeRows!;
-
-  const { creds, loginRecord } = await readClaudeCredentials();
-  const loginExpired = claudeLoginExpired(creds, loginRecord, now);
-  const signedOut = () => {
-    forgetClaudeRows();
-    console.log("[usage-remaining] claude: Claude Code login expired (keychain token blank or expired); run `claude auth login`");
-    return claudeSignedOutRows();
-  };
-  const tokens = creds
-    .filter((cred) => cred.expiresAt == null || cred.expiresAt > now + 30_000)
-    .map((cred) => cred.token)
-    .filter((token) => (claudeTokenCooldownUntil.get(tokenKey(token)) ?? 0) <= now);
-  if (tokens.length === 0) {
-    if (loginExpired) return signedOut();
-    console.log(`[usage-remaining] claude: no usable token (${creds.length} found, all expired or cooling down)`);
-    return rowsStillValid ? lastClaudeRows! : fallback;
-  }
-
-  let body: ClaudeUsageBody | null = null;
-  for (const token of tokens) {
-    const res = await fetchWithTimeout("https://api.anthropic.com/api/oauth/usage", {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/json",
-        "anthropic-beta": "oauth-2025-04-20",
-      },
-    });
-    const source = creds.find((c) => c.token === token)?.source ?? "?";
-    if (res.status === 403) {
-      claudeTokenCooldownUntil.set(tokenKey(token), now + CLAUDE_FORBIDDEN_COOLDOWN_MS);
-      saveCache();
-      console.log(`[usage-remaining] claude: 403 from ${source} token, not retrying for ${CLAUDE_FORBIDDEN_COOLDOWN_MS / 3_600_000}h`);
-      continue;
-    }
-    if (res.status === 401) {
-      console.log(`[usage-remaining] claude: 401 from ${source} token`);
-      continue;
-    }
-    if (res.status === 429) {
-      const retryAfter = Number(res.headers.get("retry-after"));
-      const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : CLAUDE_DEFAULT_COOLDOWN_MS;
-      claudeTokenCooldownUntil.set(tokenKey(token), now + waitMs);
-      saveCache();
-      console.log(`[usage-remaining] claude: 429 from ${source} token, cooling down ${Math.round(waitMs / 60_000)}m`);
-      continue;
-    }
-    if (!res.ok) {
-      console.log(`[usage-remaining] claude: ${res.status} from ${source} token`);
-      continue;
-    }
-    console.log(`[usage-remaining] claude: ok via ${source} token`);
-    body = (await res.json()) as ClaudeUsageBody;
-    break;
-  }
-  if (!body) return loginExpired ? signedOut() : fallback;
-
-  const rows = parseClaudeUsage(body);
-  lastClaudeRows = rows;
-  lastClaudeAt = Date.now();
-  saveCache();
-  return rows;
-}
+const claudeState = emptyClaudeState();
+const fetchClaude = createClaudePoller({
+  state: claudeState,
+  readCredentials: readClaudeCredentials,
+  request: (token) => fetchWithTimeout("https://api.anthropic.com/api/oauth/usage", {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+      "anthropic-beta": "oauth-2025-04-20",
+    },
+  }),
+  parse: (body) => parseClaudeUsage(body as ClaudeUsageBody),
+  fallback: claudeFallbackRows,
+  signedOut: claudeSignedOutRows,
+  changed: saveCache,
+  log: (message) => console.log(`[usage-remaining] claude: ${message}`),
+});
 
 type ClaudeWindow = { utilization?: number | null; resets_at?: string | null } | null;
 export type ClaudeUsageBody = {
@@ -628,38 +552,47 @@ const lastGood = new Map<string, { row: RemainingRow; at: number }>();
 const LAST_GOOD_TTL_MS = 6 * 60 * 60_000;
 const CLAUDE_META_KEY = "_claude";
 const CACHE_PATH = join(process.env.PASEO_HOME || join(home, ".paseo"), "usage-remaining.cache.json");
-let cacheLoaded = false;
-let savePending = false;
+let cacheLoad: Promise<void> | undefined;
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
+let cacheWrite = Promise.resolve();
 
-async function loadCache(): Promise<void> {
-  if (cacheLoaded) return;
-  cacheLoaded = true;
+function loadCache(): Promise<void> {
+  return cacheLoad ??= readCache();
+}
+
+async function readCache(): Promise<void> {
   const raw = await readJson(CACHE_PATH);
   if (raw && typeof raw === "object") {
     for (const [id, entry] of Object.entries(raw as Record<string, unknown>)) {
       if (id === CLAUDE_META_KEY) {
-        const meta = entry as { tokenCooldowns?: Record<string, number>; lastAt?: number } | null;
-        for (const [key, until] of Object.entries(meta?.tokenCooldowns ?? {})) {
-          if (typeof until === "number" && until > Date.now()) claudeTokenCooldownUntil.set(key, until);
-        }
-        if (typeof meta?.lastAt === "number") lastClaudeAt = Math.max(lastClaudeAt, meta.lastAt);
+        Object.assign(claudeState, restoreClaudeState(entry));
         continue;
       }
       const cached = entry as { row?: RemainingRow; at?: number } | null;
-      if (cached && typeof cached.at === "number" && cached.row) lastGood.set(id, { row: cached.row, at: cached.at });
+      if (cached && typeof cached.at === "number" && cached.row && cached.row.brand !== "claude" && cached.row.brand !== "fable") lastGood.set(id, { row: cached.row, at: cached.at });
     }
   }
 }
 
 function saveCache(): void {
-  if (savePending) return;
-  savePending = true;
-  setTimeout(() => {
-    savePending = false;
+  saveTimer ??= setTimeout(() => { void flushUsageCache(); }, 500);
+}
+
+// Plugin reload waits for cleanup, so a just-received 429 cannot be lost by
+// stopping the subprocess before the normal debounced cache write runs.
+export function flushUsageCache(): Promise<void> {
+  clearTimeout(saveTimer);
+  saveTimer = undefined;
+  if (!cacheLoad) return cacheWrite;
+  cacheWrite = cacheWrite.then(async () => {
+    await cacheLoad;
     const obj: Record<string, unknown> = Object.fromEntries(lastGood.entries());
-    obj[CLAUDE_META_KEY] = { tokenCooldowns: Object.fromEntries(claudeTokenCooldownUntil.entries()), lastAt: lastClaudeAt };
-    void writeFile(CACHE_PATH, JSON.stringify(obj)).catch(() => undefined);
-  }, 500);
+    obj[CLAUDE_META_KEY] = claudeState;
+    const temp = `${CACHE_PATH}.${process.pid}.tmp`;
+    await writeFile(temp, JSON.stringify(obj), { mode: 0o600 });
+    await rename(temp, CACHE_PATH);
+  }).catch(() => { console.log("[usage-remaining] cache write failed"); });
+  return cacheWrite;
 }
 
 // A cached row whose window already reset is worse than no data: it would show
@@ -736,7 +669,12 @@ export async function fetchUsage(input: { force?: boolean } = {}): Promise<Usage
   rows.push(grok.status === "fulfilled" ? grok.value : baseRow("grok_week", "grok", "weekly", "Grok"));
   rows.push(cursor.status === "fulfilled" ? cursor.value : baseRow("cursor_month", "cursor", "weekly", "Cursor"));
 
-  const merged = withLastGood(rows);
+  // Claude samples are credential-bound and retain their original observation time.
+  // Never let the provider-wide cache reintroduce a different account's rows.
+  const merged = [
+    ...rows.filter((r) => r.brand === "claude" || r.brand === "fable").map((r) => ({ ...r, resetAt: resetLabel(r.resetIso) })),
+    ...withLastGood(rows.filter((r) => r.brand !== "claude" && r.brand !== "fable")),
+  ];
   const session = merged.filter((r) => r.group === "session");
   const weekly = merged.filter((r) => r.group === "weekly");
   return {

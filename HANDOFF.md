@@ -79,3 +79,16 @@ window shows up without a plugin change.
   `npm run typecheck` PASS, `npm test` 35/35 PASS. Reloaded 21:25 UTC; log shows
   `claude: Claude Code login expired ...`.
 - Recovery is `claude auth login` (the browser flow) on Dan's Mac; expect it about monthly.
+
+
+## 2026-10-18: Follow the Claude worker credential
+
+- Branch: `fix/claude-worker-usage`. The installed checkout already contained three local commits (`f5ea5ad`, `1297d89`, `c996da5`) beyond remote main. They are preserved as prerequisites on this branch; main is not pushed or merged.
+- `claude.env` now takes priority over the daemon environment and the interactive Keychain/file login. All Claude rows carry `workers` or `fallback`; dashboard details identify the credential source, optional fingerprint-bound account label, and primary lookup failure.
+- `server/claude-poll.ts` owns credential-bound samples, per-token five-minute attempt limits, single-flight requests, persisted 429/403 cooldowns, and cache expiry. Old global Claude rows cannot masquerade as worker usage. Plugin cleanup flushes its cache atomically before a reload.
+- No inference requests run inside the plugin. A setup token can successfully run workers while lacking the scope needed by the usage endpoint. Such a token yields an explicit fallback/unavailable result, not a fabricated quota.
+- Source installed from the branch checkout with `paseo plugin reload usage-remaining`; `paseo plugin ls usage-remaining --json` confirms `running`. The original directory remains intact. Backup (source, configuration and cache; dependencies remain in the original directory): `~/.paseo/plugin-backups/usage-remaining-20261018-112706`.
+- Validation: `npm run typecheck` PASS; `npm test` PASS (51 tests, including process-to-process cache/account-switch/cooldown coverage); `git diff --check` PASS; `gitleaks dir . --redact` found no leaks. Live `usage.list` confirms the Keychain result is labelled `Claude (fallback)` and the worker account is named in its details.
+- Visual QA limitation: native computer-use timed out. The installed web UI loaded locally, but its websocket connection was correctly refused by the daemon's Origin policy (HTTP 403). No Origin allowlist or daemon settings were widened. Existing native/web composer regression tests pass; an actual phone/native visual inspection is not claimed.
+- The reported worker-token 429 was preserved conservatively through 2026-10-18 19:18:55 UTC. A one-shot RPC verification waits until that deadline; update this entry with its terminal result before closing the task.
+- Rollback: unregister the directory source (`paseo plugin remove usage-remaining`, which keeps its files), then install `~/.paseo/plugins/usage-remaining --id usage-remaining` and reload. Restoring the backup cache would also restore the old account-selection behavior; prefer the new credential-scoped cache unless reverting the code.
