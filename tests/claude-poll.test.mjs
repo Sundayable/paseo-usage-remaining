@@ -67,6 +67,15 @@ test("429 cooldown and five-minute attempts survive reloads and repeated manual 
   assert.deepEqual(reloaded.requests, [worker.token]);
 });
 
+test("403 scope diagnostics retain only fixed text, never provider bodies or echoed credentials", async () => {
+  const f = fixture({ creds: [worker], request: () => new Response(JSON.stringify({ error: { message: `Token ${worker.token} is missing required user:profile scope` } }), { status: 403 }) });
+  const rows = await f.poll();
+  assert.match(rows[0].detail, /missing user:profile scope/);
+  const restored = restoreClaudeState(JSON.parse(JSON.stringify(f.state)), START);
+  assert.equal(restored.errors[credentialKey(worker.token)], "HTTP 403 (missing user:profile scope)");
+  for (const output of [rows, f.state, f.logs]) assert.ok(!JSON.stringify(output).includes(worker.token));
+});
+
 test("legacy cooldowns migrate, but unscoped legacy rows are never worker samples", () => {
   const key = credentialKey(worker.token);
   const state = restoreClaudeState({ tokenCooldowns: { [key]: START + 3600_000 }, lastAt: START, claude_session: { row: { remainingText: "100%" }, at: START } }, START);

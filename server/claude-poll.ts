@@ -50,7 +50,7 @@ export function restoreClaudeState(raw: unknown, now = Date.now()): ClaudePollSt
     }
   }
   for (const [key, error] of Object.entries(saved.errors ?? {})) {
-    if (/^[a-f0-9]{16}$/.test(key) && /^(HTTP \d{3}|network error|no usage data)$/.test(error)) state.errors[key] = error;
+    if (/^[a-f0-9]{16}$/.test(key) && /^(HTTP \d{3}( \(missing user:profile scope\))?|network error|no usage data)$/.test(error)) state.errors[key] = error;
   }
   return state;
 }
@@ -144,6 +144,15 @@ export function createClaudePoller(deps: Dependencies): () => Promise<RemainingR
             reason = "no usage data";
           } else {
             reason = `HTTP ${response.status}`;
+            if (response.status === 403) {
+              // Only retain this fixed diagnostic, never an arbitrary server body
+              // that could echo credentials or other private request details.
+              const body = await response.json().catch(() => null) as { error?: { message?: unknown } } | null;
+              const message = body?.error?.message;
+              if (typeof message === "string" && /scope/i.test(message) && /user:profile/.test(message)) {
+                reason = "HTTP 403 (missing user:profile scope)";
+              }
+            }
             if (response.status === 429 || response.status === 403) {
               const delay = response.status === 403 ? FORBIDDEN_COOLDOWN_MS : retryDelay(response.headers.get("retry-after"), now());
               state.tokenCooldowns[key] = now() + delay;
