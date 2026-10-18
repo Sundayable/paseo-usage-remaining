@@ -6,7 +6,7 @@ type Agent = { id: string; workspaceId?: string | null; provider: string };
 
 export function usageLabel(provider: string, snapshot?: UsageSnapshot): string {
   const brand = provider.split("/")[0];
-  const rows = snapshot?.rows.filter((row) => row.brand === brand && row.status === "available") ?? [];
+  const rows = snapshot?.rows.filter((row) => row.brand === brand && (row.status === "available" || (row.status === "error" && row.remainingText === "unknown"))) ?? [];
   if (!snapshot) return "Usage…";
   if (!rows.length) {
     // A state the user has to fix (e.g. Claude Code signed out) is named, not hidden.

@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createClaudePoller, credentialKey, emptyClaudeState, restoreClaudeState, retryDelay } from "../server/claude-poll.ts";
-import { parseClaudeUsage, claudeSignedOutRows, readClaudeEnvToken } from "../server/usage.ts";
+import { parseClaudeUsage, parseClaudeHeaders, claudeSignedOutRows, readClaudeEnvToken } from "../server/usage.ts";
 import { usageLabel } from "../client/registry.ts";
 
 const START = Date.parse("2026-10-18T18:00:00Z");
@@ -19,18 +19,116 @@ const ok = (used = 13) => new Response(JSON.stringify(body(used)), { status: 200
 function fixture(options = {}) {
   let at = START;
   let creds = options.creds ?? [personal, worker];
-  const requests = [], logs = [];
+  const requests = [], probes = [], logs = [];
   const state = options.state ?? emptyClaudeState();
   const poll = createClaudePoller({
     readCredentials: async () => ({ creds, loginRecord: true }),
     request: async token => { requests.push(token); return options.request ? options.request(token) : ok(); },
+    headerProbe: options.probe ? { request: async token => { probes.push(token); return options.probe(token); }, parse: parseClaudeHeaders } : undefined,
+    persist: options.persist,
     parse: parseClaudeUsage,
     fallback: () => parseClaudeUsage({}),
     signedOut: claudeSignedOutRows,
     state, now: () => at, changed() {}, log: msg => logs.push(msg),
   });
-  return { poll, state, requests, logs, advance: ms => { at += ms; }, select: value => { creds = value; } };
+  return { poll, state, requests, probes, logs, advance: ms => { at += ms; }, select: value => { creds = value; } };
 }
+
+const headerResponse = (session = "0.13", weekly, status = 200, extra = {}) => new Response(null, { status, headers: {
+  "anthropic-ratelimit-unified-5h-utilization": session,
+  "anthropic-ratelimit-unified-5h-reset": String((START + 3600_000) / 1000),
+  ...(weekly == null ? {} : { "anthropic-ratelimit-unified-7d-utilization": weekly, "anthropic-ratelimit-unified-7d-reset": String((START + 86400_000) / 1000) }),
+  ...extra,
+} });
+
+test("Haiku headers report worker session and explicitly unknown week, never personal 100%", async () => {
+  const f = fixture({ request: () => new Response(null, { status: 429 }), probe: () => headerResponse() });
+  const rows = await f.poll();
+  assert.deepEqual(f.requests, [worker.token]);
+  assert.deepEqual(f.probes, [worker.token]);
+  assert.equal(rows[0].remainingText, "87%");
+  assert.equal(rows[1].remainingPct, null);
+  assert.equal(rows[1].remainingText, "unknown");
+  assert.equal(usageLabel("claude", { rows }), "Claude (workers) · 5H 87% · WK unknown");
+  assert.match(rows[0].detail, /worker token.*429.*Haiku response headers/);
+  assert.ok(!JSON.stringify([rows, f.state, f.logs]).includes(worker.token));
+});
+
+test("header parser handles weekly zero, over-limit fractions and invalid/missing values without inventing usage", () => {
+  assert.deepEqual(parseClaudeHeaders(headerResponse("0.2", "0").headers).map(r => r.remainingPct), [80, 100]);
+  assert.equal(parseClaudeHeaders(headerResponse("1.25", "0.4").headers)[0].remainingPct, 0);
+  assert.equal(parseClaudeHeaders(headerResponse("0.2", "0.4").headers)[1].resetIso, new Date(START + 86400_000).toISOString());
+  for (const value of ["", " ", "bad", "Infinity", "-0.1"]) {
+    const rows = parseClaudeHeaders(headerResponse(value).headers);
+    assert.equal(rows[0].remainingPct, null);
+    assert.equal(rows[0].status, "error");
+  }
+});
+
+test("probe attempts are persisted before sending, share single-flight, and survive reloads at the five-minute boundary", async () => {
+  const key = credentialKey(worker.token);
+  let persisted = false;
+  const f = fixture({ request: () => new Response(null, { status: 429 }), persist: async () => { persisted = true; }, probe: () => { assert.ok(persisted); return headerResponse(); } });
+  await Promise.all([f.poll(), f.poll(), f.poll()]);
+  assert.equal(f.probes.length, 1);
+  assert.equal(f.state.headerAttempts[key], START);
+  const reloaded = fixture({ state: restoreClaudeState(JSON.parse(JSON.stringify(f.state)), START), probe: () => headerResponse("0.2") });
+  await reloaded.poll();
+  reloaded.advance(299_999);
+  await reloaded.poll();
+  assert.equal(reloaded.probes.length, 0);
+  reloaded.advance(1);
+  assert.equal((await reloaded.poll())[0].remainingText, "80%");
+  assert.deepEqual(reloaded.requests, []);
+  assert.equal(reloaded.probes.length, 1);
+});
+
+test("healthy usage API and keychain-only accounts never generate inference requests", async () => {
+  for (const creds of [[worker, personal], [personal]]) {
+    const f = fixture({ creds, probe: () => { throw Error("must not probe"); } });
+    await f.poll();
+    assert.equal(f.probes.length, 0);
+  }
+});
+
+test("header samples replace stale worker weekly values and never cross credential changes", async () => {
+  let fail = false;
+  const f = fixture({ creds: [worker], request: () => fail ? new Response(null, { status: 403 }) : ok(), probe: token => token === worker.token ? headerResponse("0.2") : new Response(null, { status: 401 }) });
+  await f.poll();
+  fail = true;
+  f.advance(300_000);
+  const rows = await f.poll();
+  assert.equal(rows[0].remainingText, "80%");
+  assert.equal(rows[1].remainingText, "unknown");
+  f.select([{ ...worker, token: "fixture-worker-new" }]);
+  assert.equal((await f.poll())[0].remainingPct, null);
+});
+
+test("probe failures are bounded, keep safe diagnostics, and respect their own retry-after/auth cooldown", async () => {
+  for (const status of [429, 403, 401, 500, 0]) {
+    const f = fixture({ creds: [worker], request: () => new Response(null, { status: 429 }), probe: () => {
+      if (!status) throw Error(worker.token);
+      return new Response(worker.token, { status, headers: { "retry-after": "600" } });
+    } });
+    await f.poll();
+    await f.poll();
+    assert.equal(f.probes.length, 1);
+    f.advance(300_000);
+    await f.poll();
+    assert.equal(f.probes.length, [429, 403, 401].includes(status) ? 1 : 2);
+    assert.ok(!JSON.stringify([f.state, f.logs]).includes(worker.token));
+  }
+});
+
+test("a quota-rejected probe can supply real headers while respecting retry-after", async () => {
+  const f = fixture({ request: () => new Response(null, { status: 429 }), probe: () => headerResponse("1", "0.5", 429, { "retry-after": "3600" }) });
+  const rows = await f.poll();
+  assert.equal(rows[0].remainingPct, 0);
+  assert.equal(rows[1].remainingPct, 50);
+  f.advance(300_000);
+  await f.poll();
+  assert.equal(f.probes.length, 1);
+});
 
 test("worker token wins over an idle personal keychain account, with source in the chip", async () => {
   const f = fixture({ request: token => token === worker.token ? ok(13) : ok(0) });

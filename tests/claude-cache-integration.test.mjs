@@ -26,6 +26,12 @@ test("real cache adapter drops legacy account rows, isolates account switches, a
       import { fetchUsage, flushUsageCache } from ${JSON.stringify(usageUrl)};
       const calls = [];
       globalThis.fetch = async (url, init) => {
+        if (url === 'https://api.anthropic.com/v1/messages') {
+          const body = JSON.parse(init.body);
+          if (body.model !== 'claude-haiku-4-5-20251001' || body.max_tokens !== 1 || body.messages[0].content !== '.' || init.headers.Authorization !== 'Bearer fixture-worker-two') throw Error('unexpected probe configuration');
+          calls.push('header');
+          return new Response(null, { headers: { 'anthropic-ratelimit-unified-5h-utilization': '0.25', 'anthropic-ratelimit-unified-5h-reset': String(Math.floor(Date.now()/1000)+3600) } });
+        }
         if (url !== 'https://api.anthropic.com/api/oauth/usage') throw Error('unexpected request');
         const token = init.headers.Authorization.slice(7);
         calls.push(token === 'fixture-keychain' ? 'keychain' : 'worker');
@@ -55,14 +61,14 @@ test("real cache adapter drops legacy account rows, isolates account switches, a
 
     await writeFile(join(auth, "claude.env"), "CLAUDE_CODE_OAUTH_TOKEN=fixture-worker-two\n");
     const switched = await child();
-    assert.deepEqual(switched.calls, ["worker", "keychain"]);
-    assert.equal(switched.first.label, "Claude (fallback)");
-    assert.equal(switched.first.remainingText, "100%");
-    assert.match(switched.first.detail, /worker usage unavailable.*429/);
+    assert.deepEqual(switched.calls, ["worker", "header"]);
+    assert.equal(switched.first.label, "Claude (workers)");
+    assert.equal(switched.first.remainingText, "75%");
+    assert.match(switched.first.detail, /429.*Haiku response headers/);
 
     const reloaded = await child();
     assert.deepEqual(reloaded.calls, []);
-    assert.equal(reloaded.first.label, "Claude (fallback)");
+    assert.equal(reloaded.first.label, "Claude (workers)");
     assert.match(reloaded.first.detail, /retry after/);
     const saved = await readFile(cachePath, "utf8");
     assert.ok(!saved.includes("fixture-worker") && !saved.includes("fixture-keychain"));

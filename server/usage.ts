@@ -220,11 +220,42 @@ const fetchClaude = createClaudePoller({
     },
   }),
   parse: (body) => parseClaudeUsage(body as ClaudeUsageBody),
+  headerProbe: {
+    request: (token) => fetchWithTimeout("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "oauth-2025-04-20",
+      },
+      body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 1, system: "You are Claude Code, Anthropic's official CLI for Claude.", messages: [{ role: "user", content: "." }] }),
+    }),
+    parse: parseClaudeHeaders,
+  },
   fallback: claudeFallbackRows,
   signedOut: claudeSignedOutRows,
   changed: saveCache,
+  persist: flushUsageCache,
   log: (message) => console.log(`[usage-remaining] claude: ${message}`),
 });
+
+// Unified utilization is a fraction (0.13 means 13% used), unlike /oauth/usage.
+// Missing windows stay unknown and must never be filled from a personal login.
+export function parseClaudeHeaders(headers: Headers): RemainingRow[] {
+  return ([ ["5h", "session"], ["7d", "weekly"] ] as const).map(([window, group]) => {
+    const prefix = `anthropic-ratelimit-unified-${window}`;
+    const value = headers.get(`${prefix}-utilization`);
+    const used = value?.trim() ? Number(value) : NaN;
+    const remaining = Number.isFinite(used) && used >= 0 ? remainingFromUsed(used * 100) : null;
+    const reset = Number(headers.get(`${prefix}-reset`));
+    const resetMs = reset * 1000;
+    const iso = reset > 0 && Number.isFinite(resetMs) && resetMs <= 8.64e15 ? new Date(resetMs).toISOString() : null;
+    const result = row(group === "session" ? "claude_session" : "claude_week", "claude", group, "Claude", remaining, iso,
+      `Haiku response headers · ${window} quota${remaining == null ? " not reported" : ""}`);
+    return remaining == null ? { ...result, remainingText: "unknown", status: "error" as const } : result;
+  });
+}
 
 type ClaudeWindow = { utilization?: number | null; resets_at?: string | null } | null;
 export type ClaudeUsageBody = {

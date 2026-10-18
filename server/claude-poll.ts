@@ -19,6 +19,9 @@ export type ClaudePollState = {
   lastAttempts: Record<string, number>;
   samples: Record<string, Sample>;
   errors: Record<string, string>;
+  headerAttempts: Record<string, number>;
+  headerCooldowns: Record<string, number>;
+  headerErrors: Record<string, string>;
   legacyLastAt?: number;
 };
 
@@ -27,7 +30,7 @@ export function credentialKey(token: string): string {
 }
 
 export function emptyClaudeState(): ClaudePollState {
-  return { tokenCooldowns: {}, lastAttempts: {}, samples: {}, errors: {} };
+  return { tokenCooldowns: {}, lastAttempts: {}, samples: {}, errors: {}, headerAttempts: {}, headerCooldowns: {}, headerErrors: {} };
 }
 
 // Retain old cooldowns, but never migrate the old unscoped 100% rows into a
@@ -52,6 +55,14 @@ export function restoreClaudeState(raw: unknown, now = Date.now()): ClaudePollSt
   for (const [key, error] of Object.entries(saved.errors ?? {})) {
     if (/^[a-f0-9]{16}$/.test(key) && /^(HTTP \d{3}( \(missing user:profile scope\))?|network error|no usage data)$/.test(error)) state.errors[key] = error;
   }
+  for (const name of ["headerAttempts", "headerCooldowns"] as const) {
+    for (const [key, value] of Object.entries(saved[name] ?? {})) {
+      if (/^[a-f0-9]{16}$/.test(key) && Number.isFinite(value)) state[name][key] = value;
+    }
+  }
+  for (const [key, error] of Object.entries(saved.headerErrors ?? {})) {
+    if (/^[a-f0-9]{16}$/.test(key) && /^(HTTP \d{3}|network error|no quota headers)$/.test(error)) state.headerErrors[key] = error;
+  }
   return state;
 }
 
@@ -69,10 +80,12 @@ type Dependencies = {
   readCredentials(): Promise<{ creds: ClaudeCredential[]; loginRecord: boolean }>;
   request(token: string): Promise<Response>;
   parse(body: unknown): RemainingRow[];
+  headerProbe?: { request(token: string): Promise<Response>; parse(headers: Headers): RemainingRow[] };
   fallback(): RemainingRow[];
   signedOut(): RemainingRow[];
   state: ClaudePollState;
   changed(): void;
+  persist?(): Promise<void>;
   now?(): number;
   log?(message: string): void;
 };
@@ -165,6 +178,40 @@ export function createClaudePoller(deps: Dependencies): () => Promise<RemainingR
         state.errors[key] = reason;
         deps.changed();
         deps.log?.(`${reason} from ${cred.source} token`);
+      }
+      // Usage-read cooldowns do not apply to the separately authorized minimal
+      // inference probe. Its own persisted limits include failed attempts.
+      if (cred.source === "env" && reason && deps.headerProbe) {
+        const probeAt = now();
+        if (probeAt - (state.headerAttempts[key] ?? -Infinity) >= CLAUDE_MIN_INTERVAL_MS &&
+            (state.headerCooldowns[key] ?? 0) <= probeAt) {
+          state.headerAttempts[key] = probeAt;
+          deps.changed();
+          await deps.persist?.();
+          let probeError: string;
+          try {
+            const response = await deps.headerProbe.request(cred.token);
+            const rows = deps.headerProbe.parse(response.headers);
+            // Read metadata only; never retain generated content or error bodies.
+            await response.body?.cancel();
+            if (response.status === 429) state.headerCooldowns[key] = now() + Math.max(CLAUDE_MIN_INTERVAL_MS, retryDelay(response.headers.get("retry-after"), now()));
+            if (response.status === 401 || response.status === 403) state.headerCooldowns[key] = now() + FORBIDDEN_COOLDOWN_MS;
+            if ((response.ok || response.status === 429) && rows.some((row) => row.status === "available")) {
+              state.samples[key] = { rows, at: now() };
+              delete state.headerErrors[key];
+              deps.changed();
+              deps.log?.("ok via env token (Haiku response headers)");
+              return decorate(rows, cred, `usage API unavailable · ${reason}`);
+            }
+            probeError = response.ok ? "no quota headers" : `HTTP ${response.status}`;
+          } catch {
+            probeError = "network error";
+          }
+          state.headerErrors[key] = probeError;
+          deps.changed();
+          deps.log?.(`Haiku header probe: ${probeError}`);
+        }
+        if (state.headerErrors[key]) reason += ` · Haiku header probe: ${state.headerErrors[key]}`;
       }
       const sample = cached(key, now());
       if (sample) return decorate(sample, cred, [workerReason, reason].filter(Boolean).join(" · "), reason ? state.samples[key].at : undefined);
