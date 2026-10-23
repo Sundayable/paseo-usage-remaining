@@ -124,3 +124,17 @@ bootstrap, live updates, moving/removing agents, teardown races, unavailable usa
 and scoped web style restoration/fallback.
 SDK dependencies are pinned to the installed stable Paseo 0.8.0 API; the live docs may
 show a newer subscription API that is not yet in that release.
+
+### Sundayable Team usage for Telegram (SUN-553)
+
+The bridge can request `usage.list` with `claudeContext: "sundayable-team"`.
+This reads only the existing mode-600 `claude-b.env` token whose local enrollment
+label is `Sundayable Team (B)`. It never falls back to the active `claude.env`,
+Personal A, Keychain or a new login. Claude rows carry `accountScope` and the
+original credential-bound `observedAt`; missing/expired values remain unknown.
+The existing bounded quota-header probe and provider cooldowns are unchanged.
+Cursor is not fetched or returned for this context. Default worker telemetry
+continues to follow the credential actually used by workers.
+
+Check: `npm run typecheck && npm test`. Reload only this plugin after source
+backup; no daemon restart, credential change or agent restart is required.

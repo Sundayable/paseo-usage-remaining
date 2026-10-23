@@ -15,6 +15,8 @@ export const RemainingRowSchema = z.object({
   detail: z.string().nullable(),
   tone: RemainingToneSchema,
   status: z.enum(["available", "unavailable", "error"]),
+  observedAt: z.number().nullable().optional(),
+  accountScope: z.literal("sundayable-team").optional(),
 });
 
 export const UsageSnapshotSchema = z.object({
@@ -25,7 +27,7 @@ export const UsageSnapshotSchema = z.object({
 
 export const listUsage = defineRpc({
   name: "usage.list",
-  input: z.object({ force: z.boolean().optional() }),
+  input: z.object({ force: z.boolean().optional(), claudeContext: z.enum(["workers", "sundayable-team"]).optional() }),
   output: UsageSnapshotSchema,
 });
 

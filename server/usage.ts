@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readFile, writeFile, rename } from "node:fs/promises";
+import { readFile, writeFile, rename, lstat } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -136,6 +136,22 @@ export async function readClaudeEnvToken(
   return inheritedToken ? { token: inheritedToken, description: "CLAUDE_CODE_OAUTH_TOKEN" } : undefined;
 }
 
+/** Explicit Team B only. Never use the active/personal token or start a login. */
+export async function readClaudeTeamCredentials(root: string = home): Promise<{ creds: ClaudeCredential[]; loginRecord: boolean }> {
+  try {
+    const path = join(root, ".config/agent-core/auth/claude-b.env");
+    const info = await lstat(path);
+    if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o777) !== 0o600) return { creds: [], loginRecord: false };
+    const text = await readFile(path, "utf8");
+    const match = text.match(/^\s*(?:export\s+)?CLAUDE_CODE_OAUTH_TOKEN\s*=\s*(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^\s#"']+))\s*$/);
+    const token = match?.[1] ?? match?.[2] ?? match?.[3];
+    if (!token) return { creds: [], loginRecord: false };
+    const labels = await readJson(join(root, ".paseo/usage-remaining.accounts.json")) as Record<string, unknown> | null;
+    if (labels?.[credentialKey(token)] !== "Sundayable Team (B)") return { creds: [], loginRecord: false };
+    return { creds: [{ token, expiresAt: null, source: "env", description: "Sundayable Team (B) · claude-team" }], loginRecord: true };
+  } catch { return { creds: [], loginRecord: false }; }
+}
+
 function parseClaudeCredential(raw: unknown, source: ClaudeCredential["source"]): ClaudeCredential | null {
   const oauth = (raw as { claudeAiOauth?: { accessToken?: string; expiresAt?: number; subscriptionType?: string } } | null)?.claudeAiOauth;
   if (!oauth?.accessToken) return null;
@@ -209,19 +225,18 @@ function claudeFallbackRows(): RemainingRow[] {
 }
 
 const claudeState = emptyClaudeState();
-const fetchClaude = createClaudePoller({
+const claudeDependencies = {
   state: claudeState,
-  readCredentials: readClaudeCredentials,
-  request: (token) => fetchWithTimeout("https://api.anthropic.com/api/oauth/usage", {
+  request: (token: string) => fetchWithTimeout("https://api.anthropic.com/api/oauth/usage", {
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: "application/json",
       "anthropic-beta": "oauth-2025-04-20",
     },
   }),
-  parse: (body) => parseClaudeUsage(body as ClaudeUsageBody),
+  parse: (body: unknown) => parseClaudeUsage(body as ClaudeUsageBody),
   headerProbe: {
-    request: (token) => fetchWithTimeout("https://api.anthropic.com/v1/messages", {
+    request: (token: string) => fetchWithTimeout("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -237,8 +252,10 @@ const fetchClaude = createClaudePoller({
   signedOut: claudeSignedOutRows,
   changed: saveCache,
   persist: flushUsageCache,
-  log: (message) => console.log(`[usage-remaining] claude: ${message}`),
-});
+  log: (message: string) => console.log(`[usage-remaining] claude: ${message}`),
+};
+const fetchClaude = createClaudePoller({ ...claudeDependencies, readCredentials: readClaudeCredentials });
+const fetchClaudeTeam = createClaudePoller({ ...claudeDependencies, readCredentials: readClaudeTeamCredentials });
 
 // Unified utilization is a fraction (0.13 means 13% used), unlike /oauth/usage.
 // Missing windows stay unknown and must never be filled from a personal login.
@@ -677,13 +694,13 @@ function pillText(rows: RemainingRow[]): string {
   return rows.map((r) => `${r.label} ${r.remainingText}`).join(" · ");
 }
 
-export async function fetchUsage(input: { force?: boolean } = {}): Promise<UsageSnapshot> {
+export async function fetchUsage(input: { force?: boolean; claudeContext?: "workers" | "sundayable-team" } = {}): Promise<UsageSnapshot> {
   await loadCache();
   const [claude, codex, grok, cursor] = await Promise.allSettled([
-    fetchClaude(),
+    input.claudeContext === "sundayable-team" ? fetchClaudeTeam() : fetchClaude(),
     fetchCodex(),
     fetchGrok(),
-    fetchCursor(),
+    input.claudeContext === "sundayable-team" ? Promise.resolve(null) : fetchCursor(),
   ]);
   for (const [name, result] of [["claude", claude], ["codex", codex], ["grok", grok], ["cursor", cursor]] as const) {
     if (result.status === "rejected") {
@@ -692,13 +709,13 @@ export async function fetchUsage(input: { force?: boolean } = {}): Promise<Usage
     }
   }
   const rows: RemainingRow[] = [];
-  rows.push(...(claude.status === "fulfilled" ? claude.value : claudeFallbackRows()));
+  rows.push(...(claude.status === "fulfilled" ? claude.value : claudeFallbackRows()).map(row => input.claudeContext === "sundayable-team" ? { ...row, accountScope: "sundayable-team" as const, label: row.brand === "fable" ? "Fable · Sundayable Team" : "Claude · Sundayable Team" } : row));
   rows.push(...(codex.status === "fulfilled" ? codex.value : [
     baseRow("codex_session", "codex", "session", "Codex"),
     baseRow("codex_week", "codex", "weekly", "Codex"),
   ]));
   rows.push(grok.status === "fulfilled" ? grok.value : baseRow("grok_week", "grok", "weekly", "Grok"));
-  rows.push(cursor.status === "fulfilled" ? cursor.value : baseRow("cursor_month", "cursor", "weekly", "Cursor"));
+  if (input.claudeContext !== "sundayable-team") rows.push(cursor.status === "fulfilled" && cursor.value ? cursor.value : baseRow("cursor_month", "cursor", "weekly", "Cursor"));
 
   // Claude samples are credential-bound and retain their original observation time.
   // Never let the provider-wide cache reintroduce a different account's rows.

@@ -92,3 +92,12 @@ window shows up without a plugin change.
 - Visual QA limitation: native computer-use timed out. The installed web UI loaded locally, but its websocket connection was correctly refused by the daemon's Origin policy (HTTP 403). No Origin allowlist or daemon settings were widened. Existing native/web composer regression tests pass; an actual phone/native visual inspection is not claimed.
 - The one-shot post-cooldown usage request at 19:19 UTC again returned HTTP 429, so that endpoint remains on its original per-token cooldown. The approved Haiku probe independently obtained a fresh worker sample at 19:35 UTC. The older diagnostic sample was never injected into the chip, and personal-account percentages no longer replace a valid header sample.
 - Rollback: unregister the directory source (`paseo plugin remove usage-remaining`, which keeps its files), then install `~/.paseo/plugins/usage-remaining --id usage-remaining` and reload. Restoring the backup cache would also restore the old account-selection behavior; prefer the new credential-scoped cache unless reverting the code.
+
+## SUN-553 explicit Team B usage
+
+Branch `fix/sun-553-team-usage` adds the explicitly scoped `usage.list` input for
+the Telegram morning/evening digest. Existing Team B enrollment is required;
+there is no Personal fallback or new login. Per-credential samples retain their
+real observation time. TypeScript and 61 tests passed with fixture-only auth.
+Default worker telemetry is unchanged. Runtime installation/reload is recorded
+separately after verification; this branch is PR-only.
