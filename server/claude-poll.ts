@@ -114,7 +114,7 @@ export function createClaudePoller(deps: Dependencies): () => Promise<RemainingR
       observedAt != null ? `cached usage · observed ${new Date(observedAt).toISOString()}` : undefined,
       reason,
     ].filter(Boolean).join(" · ");
-    return rows.map((row) => ({ ...row, label: `${row.label} (${source})`, detail: [detail, row.detail].filter(Boolean).join(" · ") }));
+    return rows.map((row) => ({ ...row, observedAt: state.samples[credentialKey(cred.token)]?.at ?? null, label: `${row.label} (${source})`, detail: [detail, row.detail].filter(Boolean).join(" · ") }));
   }
 
   async function poll(): Promise<RemainingRow[]> {
