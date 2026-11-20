@@ -134,3 +134,12 @@ test('native sheet remains available after refresh, agent updates and provider f
     assert.equal(f.state.opened, null);
   } finally { stop(); }
 });
+
+test('Neon and Antigravity seats use the shared official Gemini quota', () => {
+  const s={rows:[{brand:'gemini',label:'Gemini · Google AI Pro',group:'session',remainingText:'85.8%',status:'available'},
+    {brand:'gemini',label:'Gemini · Google AI Pro',group:'weekly',remainingText:'95.5%',status:'available'}]};
+  for(const provider of ['neon','neon/gemini-4-neon-high','antigravity']) {
+    assert.equal(usageLabel(provider,s),'Gemini · Google AI Pro · 5H 85.8% · WK 95.5%');
+  }
+  assert.equal(usageLabel('codex',s),'Usage unavailable');
+});

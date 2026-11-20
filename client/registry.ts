@@ -5,7 +5,8 @@ import type { UsageSnapshot } from "../shared/usage";
 type Agent = { id: string; workspaceId?: string | null; provider: string };
 
 export function usageLabel(provider: string, snapshot?: UsageSnapshot): string {
-  const brand = provider.split("/")[0];
+  const providerBrand = provider.split("/")[0];
+  const brand = ["neon", "antigravity"].includes(providerBrand) ? "gemini" : providerBrand;
   const rows = snapshot?.rows.filter((row) => row.brand === brand && (row.status === "available" || (row.status === "error" && row.remainingText === "unknown"))) ?? [];
   if (!snapshot) return "Usage…";
   if (!rows.length) {

@@ -101,3 +101,15 @@ there is no Personal fallback or new login. Per-credential samples retain their
 real observation time. TypeScript and 61 tests passed with fixture-only auth.
 Default worker telemetry is unchanged. Runtime installation/reload is recorded
 separately after verification; this branch is PR-only.
+
+## 2026-11-19 Gemini subscription quota PR
+
+Isolated `feat/gemini-usage-20261119`; do not modify/reload the serving checkout.
+Official `agy` 1.5.13 statusLine output verified `Google AI Pro`, Gemini 5h and
+weekly remaining fractions plus absolute reset timestamps without an LLM prompt.
+See `server/gemini-usage.ts` and README for source, polling, privacy and cleanup.
+Gemini uses its own real observation timestamp and bypasses provider-wide stale
+cache fallback. Typecheck passed on DanDesktop; parser/poller and provider-pill
+checks passed. Full Windows suite has Unix credential-mode fixture failures;
+baseline comparison and independent Opus review are recorded in the PR.
+No main merge, installed-plugin update or live bridge reload is authorized here.
