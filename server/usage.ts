@@ -1,3 +1,4 @@
+import { fetchGemini } from "./gemini-usage.ts";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile, writeFile, rename, lstat } from "node:fs/promises";
@@ -696,11 +697,12 @@ function pillText(rows: RemainingRow[]): string {
 
 export async function fetchUsage(input: { force?: boolean; claudeContext?: "workers" | "sundayable-team" } = {}): Promise<UsageSnapshot> {
   await loadCache();
-  const [claude, codex, grok, cursor] = await Promise.allSettled([
+  const [claude, codex, grok, cursor, gemini] = await Promise.allSettled([
     input.claudeContext === "sundayable-team" ? fetchClaudeTeam() : fetchClaude(),
     fetchCodex(),
     fetchGrok(),
     input.claudeContext === "sundayable-team" ? Promise.resolve(null) : fetchCursor(),
+    fetchGemini(),
   ]);
   for (const [name, result] of [["claude", claude], ["codex", codex], ["grok", grok], ["cursor", cursor]] as const) {
     if (result.status === "rejected") {
@@ -717,9 +719,12 @@ export async function fetchUsage(input: { force?: boolean; claudeContext?: "work
   rows.push(grok.status === "fulfilled" ? grok.value : baseRow("grok_week", "grok", "weekly", "Grok"));
   if (input.claudeContext !== "sundayable-team") rows.push(cursor.status === "fulfilled" && cursor.value ? cursor.value : baseRow("cursor_month", "cursor", "weekly", "Cursor"));
 
+  const geminiRows = gemini.status === "fulfilled" ? gemini.value : [];
+
   // Claude samples are credential-bound and retain their original observation time.
   // Never let the provider-wide cache reintroduce a different account's rows.
   const merged = [
+    ...geminiRows,
     ...rows.filter((r) => r.brand === "claude" || r.brand === "fable").map((r) => ({ ...r, resetAt: resetLabel(r.resetIso) })),
     ...withLastGood(rows.filter((r) => r.brand !== "claude" && r.brand !== "fable")),
   ];

@@ -138,3 +138,29 @@ continues to follow the credential actually used by workers.
 
 Check: `npm run typecheck && npm test`. Reload only this plugin after source
 backup; no daemon restart, credential change or agent restart is required.
+
+## Gemini subscription quota (staged integration)
+
+Gemini rows use the official Antigravity CLI `statusLine` JSON contract:
+https://antigravity.google/docs/cli/statusline. `gemini-5h` and `gemini-weekly`
+are shared Gemini subscription buckets, not Neon-only token/context percentages.
+Only `remaining_fraction` and an unexpired `reset_time` are accepted for the
+verified `Google AI Pro` plan; other buckets, credit amounts and missing values
+are never converted into an estimated percentage.
+
+The macOS daemon needs the existing signed-in `~/.local/bin/agy` and system
+Python 3. Every five minutes at most, one isolated idle CLI starts in a private
+PTY with a session-only status-line callback. It sends no prompt, reads no
+credentials, disables API-key/Vertex routes and paid credits, sets browser-launch guards
+(`BROWSER` and a private `open` shim), discards terminal output and persists only the allowlisted quota fields
+in a temporary directory. Its supervisor terminates and reaps the owned CLI;
+the serving Neon seat and global CLI settings stay intact. Missing login,
+unsupported platform/plan, invalid data and failed probes return unavailable.
+Samples expire after ten minutes or at their provider reset, whichever is first.
+Neon/Antigravity composer pills use these Gemini rows. No runtime is reloaded by
+this change; both plugin and Telegram bridge need a separately approved rollout.
+
+The browser guard intercepts PATH-based `open`; an absolute `/usr/bin/open`
+inside a future CLI version is not verified. Rollout should also watch for login
+refresh contention with the main seat. Independent review: Claude Opus 5.5
+medium (`79929be2`) PASS, read-only.
