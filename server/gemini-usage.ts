@@ -9,6 +9,7 @@ import { join } from "node:path";
 import type { RemainingRow } from "../shared/usage";
 
 const WINDOWS = [["gemini_session", "gemini-5h", "session"], ["gemini_week", "gemini-weekly", "weekly"]] as const;
+const CONSUMER_PLANS = new Set(["Google AI Pro", "Google AI Ultra", "Google AI Plus"]);
 const INTERVAL_MS = 5 * 60_000;
 const TTL_MS = 10 * 60_000;
 const KEY_ENV = ["GEMINI_API_KEY", "GOOGLE_AI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CLOUD_API_KEY", "GOOGLE_GEMINI_BASE_URL", "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_GCA", "AGY_ADC_AUTH", "GOOGLE_APPLICATION_CREDENTIALS"];
@@ -17,8 +18,10 @@ function record(v: unknown): Record<string, unknown> | null { return v !== null 
 export function parseGeminiStatus(raw: unknown, now = Date.now()): RemainingRow[] {
   const data = record(raw);
   const at = data?.observedAt;
-  const valid = data?.product === "antigravity" && data.plan_tier === "Google AI Pro"
+  const planTier = typeof data?.plan_tier === "string" && CONSUMER_PLANS.has(data.plan_tier) ? data.plan_tier : null;
+  const valid = data?.product === "antigravity" && planTier !== null
     && typeof at === "number" && Number.isFinite(at) && at > 0 && at <= now && now - at <= TTL_MS;
+  const label = valid && planTier ? `Gemini · ${planTier}` : "Gemini";
   return WINDOWS.map(([id, bucket, group]) => {
     const value = valid ? record(record(data?.quota)?.[bucket]) : null;
     const fraction = value?.remaining_fraction;
@@ -27,7 +30,7 @@ export function parseGeminiStatus(raw: unknown, now = Date.now()): RemainingRow[
     const available = value?.disabled !== true && typeof fraction === "number" && Number.isFinite(fraction)
       && fraction >= 0 && fraction <= 1 && Number.isFinite(resetMs) && resetMs > now;
     const pct = available ? Math.round(fraction * 1000) / 10 : null;
-    return { id, brand: "gemini", group, label: "Gemini · Google AI Pro", remainingPct: pct,
+    return { id, brand: "gemini", group, label, remainingPct: pct,
       remainingText: pct === null ? "—" : `${pct}%`, resetAt: available ? `${Math.max(1, Math.ceil((resetMs - now) / 60000))}m` : null,
       resetIso: available ? new Date(resetMs).toISOString() : null,
       observedAt: valid ? at as number : null,
@@ -51,6 +54,7 @@ signal.signal(signal.SIGINT,halt)
 pid,fd=pty.fork()
 if pid==0:
  os.execv(sys.argv[1],[sys.argv[1],'--settings',sys.argv[2]])
+os.set_blocking(fd,False)
 end=time.monotonic()+13
 reaped=False
 try:
@@ -61,7 +65,9 @@ try:
    break
   ready,_,_=select.select([fd],[],[],0.1)
   if ready:
-   try: os.read(fd,65536)
+   try:
+    if not os.read(fd,65536): break
+   except BlockingIOError: pass
    except OSError: break
 finally:
  if not reaped:

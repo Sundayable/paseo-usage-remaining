@@ -145,7 +145,7 @@ Gemini rows use the official Antigravity CLI `statusLine` JSON contract:
 https://antigravity.google/docs/cli/statusline. `gemini-5h` and `gemini-weekly`
 are shared Gemini subscription buckets, not Neon-only token/context percentages.
 Only `remaining_fraction` and an unexpired `reset_time` are accepted for the
-verified `Google AI Pro` plan; other buckets, credit amounts and missing values
+verified Google AI consumer plans (`Google AI Pro`, `Google AI Ultra`, `Google AI Plus`); other buckets, credit amounts and missing values
 are never converted into an estimated percentage.
 
 The macOS daemon needs the existing signed-in `~/.local/bin/agy` and system
